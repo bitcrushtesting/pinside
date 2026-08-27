@@ -1,0 +1,296 @@
+"""What pinside reads out of a .kicad_pcb: probes, mounting holes, the outline, and obstacles."""
+
+from __future__ import annotations
+
+import math
+import re
+from dataclasses import dataclass, field
+
+from . import geometry as g
+from .sexpr import atom, child, find_all, floats, load
+
+# Reference prefixes that name a thing even when the footprint library does not.
+TEST_POINT_REF = re.compile(r"^TP[A-Z]*\d+$", re.I)
+MOUNTING_HOLE_REF = re.compile(r"^(H|MH|MK)\d+$", re.I)
+
+GROUND_NET = re.compile(r"^(/)?(GND|GNDA|GNDD|AGND|DGND|VSS|0)$", re.I)
+AUTO_NET = re.compile(r"^(Net-\(|unconnected-)")
+
+_EDGE_TAGS = ("gr_line", "gr_rect", "gr_arc", "gr_circle", "gr_poly", "gr_curve")
+
+
+@dataclass
+class Pad:
+    number: str
+    type: str
+    shape: str
+    size: tuple[float, float] | None
+    drill: float | None
+    layers: list[str]
+    net: str
+    x: float          # absolute, footprint rotation applied
+    y: float
+
+    @property
+    def max_dimension(self) -> float:
+        return max(self.size) if self.size else 0.0
+
+    @property
+    def min_dimension(self) -> float:
+        return min(self.size) if self.size else 0.0
+
+
+@dataclass
+class Footprint:
+    ref: str
+    value: str
+    library: str
+    x: float
+    y: float
+    rotation: float
+    side: str
+    pads: list[Pad] = field(default_factory=list)
+
+    @property
+    def bbox(self) -> g.BBox | None:
+        if not self.pads:
+            return None
+        xs, ys = [], []
+        for pad in self.pads:
+            half_w = (pad.size[0] / 2) if pad.size else 0.0
+            half_h = (pad.size[1] / 2) if pad.size else 0.0
+            xs += [pad.x - half_w, pad.x + half_w]
+            ys += [pad.y - half_h, pad.y + half_h]
+        return g.BBox(min(xs), min(ys), max(xs), max(ys))
+
+
+@dataclass
+class TestPoint:
+    ref: str
+    value: str
+    signal: str
+    net: str
+    x: float
+    y: float
+    side: str
+    pad: Pad | None
+
+    fx: float = 0.0   # position in the fixture frame, filled in by transform()
+    fy: float = 0.0
+
+    @property
+    def anonymous_net(self) -> bool:
+        return not self.net or bool(AUTO_NET.match(self.net))
+
+    @property
+    def is_ground(self) -> bool:
+        return bool(GROUND_NET.match(self.net or "")) or bool(GROUND_NET.match(self.value or ""))
+
+
+@dataclass
+class MountingHole:
+    ref: str
+    x: float
+    y: float
+    drill: float | None
+    pad_diameter: float | None
+    plated: bool
+    net: str
+
+    fx: float = 0.0
+    fy: float = 0.0
+
+
+@dataclass
+class Board:
+    source: str
+    outline: g.Outline
+    test_points: list[TestPoint]
+    mounting_holes: list[MountingHole]
+    obstacles: list[Footprint]      # every other placed footprint, for collision checks
+    frame: dict = field(default_factory=dict)
+
+
+def _net_of(pad_node) -> str:
+    """KiCad <= 9 writes (net <ordinal> "NAME"); KiCad 10 writes (net "NAME")."""
+    net = child(pad_node, "net")
+    if net is None:
+        return ""
+    if len(net) > 2 and isinstance(net[2], str):
+        return net[2]
+    return atom(net, 1)
+
+
+def _property(footprint, name: str) -> str:
+    for prop in find_all(footprint, "property"):
+        if len(prop) > 2 and prop[1] == name and isinstance(prop[2], str):
+            return prop[2]
+    return ""
+
+
+def _at(node) -> tuple[float, float, float]:
+    vals = floats(child(node, "at"))
+    vals += [0.0] * (3 - len(vals))
+    return vals[0], vals[1], vals[2]
+
+
+def _read_pad(node, fx: float, fy: float, rot: float) -> Pad:
+    px, py, _ = _at(node)
+    dx, dy = g.rotate(px, py, rot)
+    size = floats(child(node, "size"))
+    drill_node = child(node, "drill")
+    drill_vals = floats(drill_node) if drill_node is not None else []
+    layers = child(node, "layers")
+    return Pad(
+        number=atom(node, 1, "?"),
+        type=atom(node, 2, "?"),
+        shape=atom(node, 3, "?"),
+        size=(size[0], size[1]) if len(size) >= 2 else None,
+        drill=max(drill_vals) if drill_vals else None,
+        layers=[t for t in (layers[1:] if layers else []) if isinstance(t, str)],
+        net=_net_of(node),
+        x=fx + dx,
+        y=fy + dy,
+    )
+
+
+def _read_footprint(node) -> Footprint:
+    fx, fy, rot = _at(node)
+    return Footprint(
+        ref=_property(node, "Reference") or "?",
+        value=_property(node, "Value"),
+        library=node[1] if len(node) > 1 and isinstance(node[1], str) else "",
+        x=fx, y=fy, rotation=rot,
+        side="bottom" if atom(child(node, "layer"), 1).startswith("B.") else "top",
+        pads=[_read_pad(p, fx, fy, rot) for p in find_all(node, "pad")],
+    )
+
+
+def signal_name(net: str, value: str) -> str:
+    """The human name of the probed signal.
+
+    KiCad auto-names any net that was never given a label -- Net-(U2-EN) and friends. Those say
+    nothing, so fall back to the test point's Value field, which is where the schematic records
+    the intent (a test point valued POWER_IN_EN is on the power-enable line, whatever KiCad
+    decided to call the net).
+    """
+    bare = net.rsplit("/", 1)[-1]
+    if (not bare or AUTO_NET.match(bare)) and value and value.lower() != "testpoint":
+        return value
+    return bare
+
+
+def is_test_point(fp: Footprint) -> bool:
+    return "TestPoint" in fp.library or bool(TEST_POINT_REF.match(fp.ref))
+
+
+def is_mounting_hole(fp: Footprint) -> bool:
+    return "MountingHole" in fp.library or bool(MOUNTING_HOLE_REF.match(fp.ref))
+
+
+def read_outline(tree) -> g.Outline:
+    outline = g.Outline()
+    for tag in _EDGE_TAGS:
+        for node in find_all(tree, tag):
+            if atom(child(node, "layer"), 1) != "Edge.Cuts":
+                continue
+            kind = tag[3:]
+            start = floats(child(node, "start"))
+            end = floats(child(node, "end"))
+            mid = floats(child(node, "mid"))
+            center = floats(child(node, "center"))
+            radius = floats(child(node, "radius"))
+            pts_node = child(node, "pts")
+            poly = [tuple(floats(p)[:2]) for p in (pts_node or [])
+                    if isinstance(p, list) and p and p[0] == "xy"]
+
+            shape = {"kind": kind}
+            points: list[g.Point] = []
+            if kind == "rect" and len(start) >= 2 and len(end) >= 2:
+                r = radius[0] if radius else 0.0
+                shape.update(start=start[:2], end=end[:2], radius=r)
+                points = g.rounded_rect_points(tuple(start[:2]), tuple(end[:2]), r)
+            elif kind == "line" and len(start) >= 2 and len(end) >= 2:
+                shape.update(start=start[:2], end=end[:2])
+                points = [tuple(start[:2]), tuple(end[:2])]
+            elif kind == "arc" and len(start) >= 2 and len(mid) >= 2 and len(end) >= 2:
+                shape.update(start=start[:2], mid=mid[:2], end=end[:2])
+                points = g.arc_points(tuple(start[:2]), tuple(mid[:2]), tuple(end[:2]))
+            elif kind == "circle" and len(center) >= 2 and len(end) >= 2:
+                shape.update(center=center[:2], end=end[:2])
+                points = g.circle_points(tuple(center[:2]), tuple(end[:2]))
+            elif kind in ("poly", "curve") and poly:
+                shape.update(points=[list(p) for p in poly])
+                points = list(poly)
+                if kind == "poly" and points[0] != points[-1]:
+                    points.append(points[0])
+            if not points:
+                continue
+            outline.shapes.append(shape)
+            outline.segments.extend(g.polyline_segments(points))
+
+    outline.ring = g.chain_ring(outline.segments)
+    return outline
+
+
+def read_board(path: str) -> Board:
+    tree = load(path)
+    outline = read_outline(tree)
+
+    test_points: list[TestPoint] = []
+    holes: list[MountingHole] = []
+    obstacles: list[Footprint] = []
+
+    for node in find_all(tree, "footprint"):
+        fp = _read_footprint(node)
+        if is_test_point(fp):
+            pad = fp.pads[0] if fp.pads else None
+            net = pad.net if pad else ""
+            test_points.append(TestPoint(
+                ref=fp.ref, value=fp.value, signal=signal_name(net, fp.value), net=net,
+                x=pad.x if pad else fp.x, y=pad.y if pad else fp.y, side=fp.side, pad=pad))
+        elif is_mounting_hole(fp):
+            drills = [p.drill for p in fp.pads if p.drill]
+            holes.append(MountingHole(
+                ref=fp.ref, x=fp.x, y=fp.y,
+                drill=max(drills) if drills else None,
+                pad_diameter=max((p.max_dimension for p in fp.pads), default=None),
+                plated=bool(drills),
+                net=next((p.net for p in fp.pads if p.net), "")))
+        else:
+            obstacles.append(fp)
+
+    key = lambda ref: (re.sub(r"\d+$", "", ref), int(m.group()) if (m := re.search(r"\d+$", ref)) else 0)
+    test_points.sort(key=lambda t: key(t.ref))
+    holes.sort(key=lambda h: key(h.ref))
+    return Board(source=path, outline=outline, test_points=test_points,
+                 mounting_holes=holes, obstacles=obstacles)
+
+
+def transform(board: Board, origin: str = "outline", mirror: str = "none") -> Board:
+    """Fill in each item's fixture-frame coordinates.
+
+    'outline' puts (0,0) at the outline's top-left corner, which is what you want when the
+    fixture is drawn as its own board. mirror='x' additionally flips X, the transform for a DUT
+    laid face-down onto upward-pointing probes -- get this wrong and the fixture is a perfect
+    mirror image of the one you need.
+    """
+    box = board.outline.bbox
+    # A board with no outline is a finding (PS001), not a reason to refuse to look at it -- the
+    # net and pitch checks still say something useful. Fall back to raw page coordinates.
+    resolved = origin if (origin == "page" or box) else "page"
+    ox, oy = (box.min_x, box.min_y) if (resolved == "outline" and box) else (0.0, 0.0)
+    width = box.width if box else 0.0
+    height = box.height if box else 0.0
+
+    for item in [*board.test_points, *board.mounting_holes]:
+        x, y = item.x - ox, item.y - oy
+        if mirror == "x" and box:
+            x = width - x
+        elif mirror == "y" and box:
+            y = height - y
+        item.fx, item.fy = round(x, 4), round(y, 4)
+
+    board.frame = {"origin": resolved, "requested_origin": origin,
+                   "mirror": mirror if box else "none", "offset": [ox, oy]}
+    return board

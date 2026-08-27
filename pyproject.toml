@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pinside"
+version = "0.1.0"
+description = "Read a KiCad board and check whether a bed-of-nails test fixture can be built against it"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Bernhard Trinnes" }]
+keywords = ["kicad", "pcb", "test-fixture", "bed-of-nails", "pogo-pin", "hardware-test"]
+classifiers = [
+    "Intended Audience :: Manufacturing",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+dependencies = []
+
+[project.scripts]
+pinside = "pinside.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
