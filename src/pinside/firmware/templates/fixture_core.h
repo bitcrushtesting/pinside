@@ -35,7 +35,7 @@ void fx_core_init(void);
 /* Feed one received byte. A newline completes a request and dispatches it. */
 void fx_core_feed_byte(char c);
 
-void fx_core_feed(const char *data, size_t len);
+void fx_core_feed(const char* data, size_t len);
 
 /* Called from the main loop: forwards streamed UART traffic to the host as notifications. */
 void fx_core_poll(void);

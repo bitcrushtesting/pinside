@@ -22,7 +22,7 @@ enum { FX_PULL_NONE = 0, FX_PULL_UP = 1, FX_PULL_DOWN = 2 };
 enum { FX_PARITY_NONE = 0, FX_PARITY_EVEN = 1, FX_PARITY_ODD = 2 };
 
 /* Host link. Every byte the agent sees leaves through here. */
-void fx_hal_write(const char *data, size_t len);
+void fx_hal_write(const char* data, size_t len);
 
 uint64_t fx_hal_millis(void);
 
@@ -37,18 +37,18 @@ uint16_t fx_hal_adc_read(uint8_t adc_channel);
 uint16_t fx_hal_adc_full_scale(void);
 uint16_t fx_hal_adc_reference_mv(void);
 
-void fx_hal_uart_configure(uint8_t index, uint32_t baud, uint8_t data_bits,
-                           uint8_t stop_bits, int parity);
-size_t fx_hal_uart_write(uint8_t index, const uint8_t *data, size_t len);
-size_t fx_hal_uart_read(uint8_t index, uint8_t *data, size_t max);
+void fx_hal_uart_configure(uint8_t index, uint32_t baud, uint8_t data_bits, uint8_t stop_bits,
+                           int parity);
+size_t fx_hal_uart_write(uint8_t index, const uint8_t* data, size_t len);
+size_t fx_hal_uart_read(uint8_t index, uint8_t* data, size_t max);
 
 /* 0 on success, negative on NAK or bus error. */
-int fx_hal_i2c_write(uint8_t index, uint8_t address, const uint8_t *data, size_t len,
+int fx_hal_i2c_write(uint8_t index, uint8_t address, const uint8_t* data, size_t len,
                      bool hold_bus);
-int fx_hal_i2c_read(uint8_t index, uint8_t address, uint8_t *data, size_t len);
+int fx_hal_i2c_read(uint8_t index, uint8_t address, uint8_t* data, size_t len);
 
 void fx_hal_spi_configure(uint8_t index, uint32_t hz, uint8_t mode);
-void fx_hal_spi_transfer(uint8_t index, const uint8_t *tx, uint8_t *rx, size_t len);
+void fx_hal_spi_transfer(uint8_t index, const uint8_t* tx, uint8_t* rx, size_t len);
 
 #ifdef __cplusplus
 }

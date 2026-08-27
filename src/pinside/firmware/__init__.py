@@ -2,4 +2,4 @@
 
 from .generate import GenerationError, Result, config_hash, generate
 
-__all__ = ["generate", "config_hash", "GenerationError", "Result"]
+__all__ = ["GenerationError", "Result", "config_hash", "generate"]

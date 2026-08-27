@@ -33,7 +33,7 @@ class Target:
     name: str
     description: str
     gpio_count: int
-    adc_pins: dict[int, int]          # gpio -> ADC channel number
+    adc_pins: dict[int, int]  # gpio -> ADC channel number
     uart_count: int = 2
     spi_count: int = 2
     i2c_count: int = 2

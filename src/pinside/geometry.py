@@ -40,9 +40,14 @@ class BBox:
         return self.min_x <= x <= self.max_x and self.min_y <= y <= self.max_y
 
     def as_dict(self) -> dict:
-        return {"min_x": round(self.min_x, 4), "min_y": round(self.min_y, 4),
-                "max_x": round(self.max_x, 4), "max_y": round(self.max_y, 4),
-                "width_mm": round(self.width, 4), "height_mm": round(self.height, 4)}
+        return {
+            "min_x": round(self.min_x, 4),
+            "min_y": round(self.min_y, 4),
+            "max_x": round(self.max_x, 4),
+            "max_y": round(self.max_y, 4),
+            "width_mm": round(self.width, 4),
+            "height_mm": round(self.height, 4),
+        }
 
 
 @dataclass
@@ -51,7 +56,7 @@ class Outline:
 
     shapes: list[dict] = field(default_factory=list)
     segments: list[Segment] = field(default_factory=list)
-    ring: list[Point] = field(default_factory=list)   # empty when the outline is not closed
+    ring: list[Point] = field(default_factory=list)  # empty when the outline is not closed
 
     @property
     def closed(self) -> bool:
@@ -97,10 +102,12 @@ def arc_points(start: Point, mid: Point, end: Point) -> list[Point]:
     d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
     if abs(d) < 1e-12:
         return [start, end]
-    ux = ((x1 ** 2 + y1 ** 2) * (y2 - y3) + (x2 ** 2 + y2 ** 2) * (y3 - y1)
-          + (x3 ** 2 + y3 ** 2) * (y1 - y2)) / d
-    uy = ((x1 ** 2 + y1 ** 2) * (x3 - x2) + (x2 ** 2 + y2 ** 2) * (x1 - x3)
-          + (x3 ** 2 + y3 ** 2) * (x2 - x1)) / d
+    ux = (
+        (x1**2 + y1**2) * (y2 - y3) + (x2**2 + y2**2) * (y3 - y1) + (x3**2 + y3**2) * (y1 - y2)
+    ) / d
+    uy = (
+        (x1**2 + y1**2) * (x3 - x2) + (x2**2 + y2**2) * (x1 - x3) + (x3**2 + y3**2) * (x2 - x1)
+    ) / d
     r = math.hypot(x1 - ux, y1 - uy)
 
     a1 = math.atan2(y1 - uy, x1 - ux)
@@ -121,17 +128,21 @@ def arc_points(start: Point, mid: Point, end: Point) -> list[Point]:
         sweep += 2 * math.pi if sweep < 0 else -2 * math.pi
 
     steps = max(2, int(abs(math.degrees(sweep)) / ARC_STEP_DEG) + 1)
-    return [(ux + r * math.cos(a1 + sweep * i / steps),
-             uy + r * math.sin(a1 + sweep * i / steps)) for i in range(steps + 1)]
+    return [
+        (ux + r * math.cos(a1 + sweep * i / steps), uy + r * math.sin(a1 + sweep * i / steps))
+        for i in range(steps + 1)
+    ]
 
 
 def circle_points(center: Point, edge: Point) -> list[Point]:
     cx, cy = center
     r = math.hypot(edge[0] - cx, edge[1] - cy)
     steps = max(16, int(360 / ARC_STEP_DEG))
-    pts = [(cx + r * math.cos(2 * math.pi * i / steps),
-            cy + r * math.sin(2 * math.pi * i / steps)) for i in range(steps)]
-    return pts + [pts[0]]
+    pts = [
+        (cx + r * math.cos(2 * math.pi * i / steps), cy + r * math.sin(2 * math.pi * i / steps))
+        for i in range(steps)
+    ]
+    return [*pts, pts[0]]
 
 
 def rounded_rect_points(start: Point, end: Point, radius: float) -> list[Point]:
@@ -145,8 +156,12 @@ def rounded_rect_points(start: Point, end: Point, radius: float) -> list[Point]:
     steps = max(2, int(90 / ARC_STEP_DEG))
     pts: list[Point] = []
     # Corner centres in draw order, with the angle each quarter-turn starts at (Y grows down).
-    corners = [((x2 - r, y1 + r), -math.pi / 2), ((x2 - r, y2 - r), 0.0),
-               ((x1 + r, y2 - r), math.pi / 2), ((x1 + r, y1 + r), math.pi)]
+    corners = [
+        ((x2 - r, y1 + r), -math.pi / 2),
+        ((x2 - r, y2 - r), 0.0),
+        ((x1 + r, y2 - r), math.pi / 2),
+        ((x1 + r, y1 + r), math.pi),
+    ]
     for (cx, cy), a0 in corners:
         for i in range(steps + 1):
             a = a0 + (math.pi / 2) * i / steps

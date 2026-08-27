@@ -48,8 +48,8 @@ class Channel:
     """Anything the agent can name and act on: a GPIO, an ADC input, or a bus."""
 
     name: str
-    kind: str                       # gpio | adc | uart | i2c | spi
-    probe: str = ""                 # the DUT signal this lands on
+    kind: str  # gpio | adc | uart | i2c | spi
+    probe: str = ""  # the DUT signal this lands on
     description: str = ""
 
 
@@ -59,15 +59,15 @@ class GpioChannel(Channel):
     direction: str = "input"
     pull: str = "none"
     active_low: bool = False
-    initial: str = "released"       # released | asserted, for outputs
+    initial: str = "released"  # released | asserted, for outputs
     kind: str = "gpio"
 
 
 @dataclass
 class AdcChannel(Channel):
     pin: int = -1
-    adc: int = -1                   # derived from the pin
-    divider: float = 1.0            # multiply the measured volts by this
+    adc: int = -1  # derived from the pin
+    divider: float = 1.0  # multiply the measured volts by this
     nominal_v: float | None = None
     tolerance_v: float | None = None
     kind: str = "adc"
@@ -79,8 +79,8 @@ class Bus(Channel):
     pins: dict[str, int] = field(default_factory=dict)
     probes: dict[str, str] = field(default_factory=dict)
     role: str = "master"
-    guard: str = ""                 # GPIO channel that must be asserted before driving
-    stream: bool = False            # push received data to the host unasked
+    guard: str = ""  # GPIO channel that must be asserted before driving
+    stream: bool = False  # push received data to the host unasked
 
 
 @dataclass
@@ -174,8 +174,10 @@ def _bus_common(node: dict, where: str, roles: tuple[str, ...]) -> dict:
     pins = _require(node, "pins", where, dict)
     bad = [r for r in pins if r not in roles]
     if bad:
-        raise ConfigError(f"{where}: unknown pin role(s) {', '.join(sorted(bad))}; "
-                          f"expected any of {', '.join(roles)}")
+        raise ConfigError(
+            f"{where}: unknown pin role(s) {', '.join(sorted(bad))}; "
+            f"expected any of {', '.join(roles)}"
+        )
     for role, pin in pins.items():
         if not isinstance(pin, int):
             raise ConfigError(f"{where}: pins.{role} must be an integer GPIO number")
@@ -199,8 +201,9 @@ def load(path: str | Path) -> FixtureConfig:
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as err:
-        raise ConfigError(f"{path}: invalid JSON at line {err.lineno} column {err.colno}: "
-                          f"{err.msg}") from None
+        raise ConfigError(
+            f"{path}: invalid JSON at line {err.lineno} column {err.colno}: {err.msg}"
+        ) from None
     return from_dict(raw, source=str(path))
 
 
@@ -230,15 +233,23 @@ def from_dict(raw: dict, source: str = "") -> FixtureConfig:
     for i, node in enumerate(raw.get("uart", [])):
         where = f"uart[{i}]"
         common = _bus_common(node, where, UART_ROLES)
-        cfg.uart.append(UartBus(**common, baud=int(node.get("baud", 115200)),
-                                data_bits=int(node.get("data_bits", 8)),
-                                stop_bits=int(node.get("stop_bits", 1)),
-                                parity=node.get("parity", "none")))
+        cfg.uart.append(
+            UartBus(
+                **common,
+                baud=int(node.get("baud", 115200)),
+                data_bits=int(node.get("data_bits", 8)),
+                stop_bits=int(node.get("stop_bits", 1)),
+                parity=node.get("parity", "none"),
+            )
+        )
     for i, node in enumerate(raw.get("i2c", [])):
         where = f"i2c[{i}]"
         common = _bus_common(node, where, I2C_ROLES)
-        cfg.i2c.append(I2cBus(**common, hz=int(node.get("hz", 400_000)),
-                              pullups=bool(node.get("pullups", False))))
+        cfg.i2c.append(
+            I2cBus(
+                **common, hz=int(node.get("hz", 400_000)), pullups=bool(node.get("pullups", False))
+            )
+        )
     for i, node in enumerate(raw.get("spi", [])):
         where = f"spi[{i}]"
         node = dict(node)
@@ -248,31 +259,38 @@ def from_dict(raw: dict, source: str = "") -> FixtureConfig:
         if isinstance(node.get("probes"), dict):
             node["probes"] = {targets.SPI_ALIASES.get(k, k): v for k, v in node["probes"].items()}
         common = _bus_common(node, where, SPI_ROLES)
-        cfg.spi.append(SpiBus(**common, hz=int(node.get("hz", 1_000_000)),
-                              mode=int(node.get("mode", 0))))
+        cfg.spi.append(
+            SpiBus(**common, hz=int(node.get("hz", 1_000_000)), mode=int(node.get("mode", 0)))
+        )
 
     for i, node in enumerate(raw.get("gpio", [])):
         where = f"gpio[{i}]"
-        cfg.gpio.append(GpioChannel(
-            name=_require(node, "name", where, str),
-            pin=_require(node, "pin", where, int),
-            probe=node.get("probe", ""),
-            direction=node.get("direction", "input"),
-            pull=node.get("pull", "none"),
-            active_low=bool(node.get("active_low", False)),
-            initial=node.get("initial", "released"),
-            description=node.get("description", "")))
+        cfg.gpio.append(
+            GpioChannel(
+                name=_require(node, "name", where, str),
+                pin=_require(node, "pin", where, int),
+                probe=node.get("probe", ""),
+                direction=node.get("direction", "input"),
+                pull=node.get("pull", "none"),
+                active_low=bool(node.get("active_low", False)),
+                initial=node.get("initial", "released"),
+                description=node.get("description", ""),
+            )
+        )
 
     for i, node in enumerate(raw.get("adc", [])):
         where = f"adc[{i}]"
-        cfg.adc.append(AdcChannel(
-            name=_require(node, "name", where, str),
-            pin=_require(node, "pin", where, int),
-            probe=node.get("probe", ""),
-            divider=float(node.get("divider", 1.0)),
-            nominal_v=node.get("nominal_v"),
-            tolerance_v=node.get("tolerance_v"),
-            description=node.get("description", "")))
+        cfg.adc.append(
+            AdcChannel(
+                name=_require(node, "name", where, str),
+                pin=_require(node, "pin", where, int),
+                probe=node.get("probe", ""),
+                divider=float(node.get("divider", 1.0)),
+                nominal_v=node.get("nominal_v"),
+                tolerance_v=node.get("tolerance_v"),
+                description=node.get("description", ""),
+            )
+        )
     return cfg
 
 
@@ -284,12 +302,25 @@ def _check_names(cfg: FixtureConfig) -> list[Finding]:
     seen: dict[str, str] = {}
     for ch in cfg.channels:
         if not IDENTIFIER.match(ch.name):
-            out.append(Finding("PF010", ERROR, f"channel name {ch.name!r} is not usable in C",
-                               [ch.name], "use lower_snake_case starting with a letter"))
+            out.append(
+                Finding(
+                    "PF010",
+                    ERROR,
+                    f"channel name {ch.name!r} is not usable in C",
+                    [ch.name],
+                    "use lower_snake_case starting with a letter",
+                )
+            )
         if ch.name in seen:
-            out.append(Finding("PF011", ERROR, f"duplicate channel name {ch.name!r}",
-                               [f"{seen[ch.name]} and {ch.kind}"],
-                               "the agent addresses channels by name, so they must be unique"))
+            out.append(
+                Finding(
+                    "PF011",
+                    ERROR,
+                    f"duplicate channel name {ch.name!r}",
+                    [f"{seen[ch.name]} and {ch.kind}"],
+                    "the agent addresses channels by name, so they must be unique",
+                )
+            )
         seen[ch.name] = ch.kind
     return out
 
@@ -301,9 +332,15 @@ def _check_pins(cfg: FixtureConfig, target: targets.Target) -> list[Finding]:
     def claim(pin: int, who: str) -> None:
         claims.setdefault(pin, []).append(who)
         if not target.has_pin(pin):
-            out.append(Finding("PF020", ERROR,
-                               f"{who} uses GPIO{pin}, which {target.name} does not have",
-                               [who], f"{target.name} has GPIO0..GPIO{target.gpio_count - 1}"))
+            out.append(
+                Finding(
+                    "PF020",
+                    ERROR,
+                    f"{who} uses GPIO{pin}, which {target.name} does not have",
+                    [who],
+                    f"{target.name} has GPIO0..GPIO{target.gpio_count - 1}",
+                )
+            )
 
     for bus in cfg.buses:
         for role, pin in bus.pins.items():
@@ -316,12 +353,17 @@ def _check_pins(cfg: FixtureConfig, target: targets.Target) -> list[Finding]:
             wanted = (bus.peripheral, role)
             if actual != wanted:
                 candidates = target.pins_for(bus.kind, bus.peripheral, role)
-                out.append(Finding(
-                    "PF021", ERROR,
-                    f"GPIO{pin} cannot be {bus.kind}{bus.peripheral} {role}", [who],
-                    f"on {target.name} it is {bus.kind}{actual[0]} {actual[1]}; "
-                    f"{bus.kind}{bus.peripheral} {role} is available on "
-                    f"{', '.join(f'GPIO{g}' for g in candidates) or 'no pin'}"))
+                out.append(
+                    Finding(
+                        "PF021",
+                        ERROR,
+                        f"GPIO{pin} cannot be {bus.kind}{bus.peripheral} {role}",
+                        [who],
+                        f"on {target.name} it is {bus.kind}{actual[0]} {actual[1]}; "
+                        f"{bus.kind}{bus.peripheral} {role} is available on "
+                        f"{', '.join(f'GPIO{g}' for g in candidates) or 'no pin'}",
+                    )
+                )
 
     for g in cfg.gpio:
         claim(g.pin, g.name)
@@ -330,15 +372,29 @@ def _check_pins(cfg: FixtureConfig, target: targets.Target) -> list[Finding]:
         channel = target.adc_of(a.pin)
         if target.has_pin(a.pin) and channel is None:
             usable = ", ".join(f"GPIO{g}" for g in sorted(target.adc_pins))
-            out.append(Finding("PF022", ERROR, f"GPIO{a.pin} has no ADC input", [a.name],
-                               f"on {target.name} the ADC reaches {usable}"))
+            out.append(
+                Finding(
+                    "PF022",
+                    ERROR,
+                    f"GPIO{a.pin} has no ADC input",
+                    [a.name],
+                    f"on {target.name} the ADC reaches {usable}",
+                )
+            )
         else:
             a.adc = channel if channel is not None else -1
 
     for pin, owners in sorted(claims.items()):
         if len(owners) > 1:
-            out.append(Finding("PF023", ERROR, f"GPIO{pin} is claimed by more than one channel",
-                               owners, "one pin cannot serve two signals"))
+            out.append(
+                Finding(
+                    "PF023",
+                    ERROR,
+                    f"GPIO{pin} is claimed by more than one channel",
+                    owners,
+                    "one pin cannot serve two signals",
+                )
+            )
     return out
 
 
@@ -348,24 +404,48 @@ def _check_settings(cfg: FixtureConfig) -> list[Finding]:
 
     for bus in cfg.buses:
         if bus.role not in BUS_ROLES:
-            out.append(Finding("PF030", ERROR, f"{bus.name}: role {bus.role!r} is not recognised",
-                               [bus.name], f"expected one of {', '.join(BUS_ROLES)}"))
+            out.append(
+                Finding(
+                    "PF030",
+                    ERROR,
+                    f"{bus.name}: role {bus.role!r} is not recognised",
+                    [bus.name],
+                    f"expected one of {', '.join(BUS_ROLES)}",
+                )
+            )
         if bus.guard and bus.guard not in gpio_names:
-            out.append(Finding("PF031", ERROR,
-                               f"{bus.name}: guard {bus.guard!r} is not a declared gpio channel",
-                               [bus.name],
-                               "a guard names the GPIO that must be asserted before the fixture "
-                               "may drive a bus the DUT also drives"))
+            out.append(
+                Finding(
+                    "PF031",
+                    ERROR,
+                    f"{bus.name}: guard {bus.guard!r} is not a declared gpio channel",
+                    [bus.name],
+                    "a guard names the GPIO that must be asserted before the fixture "
+                    "may drive a bus the DUT also drives",
+                )
+            )
         missing = [r for r in bus.probes if r not in bus.pins]
         if missing:
-            out.append(Finding("PF032", WARNING,
-                               f"{bus.name}: probes named for pin roles the bus does not use",
-                               [f"{bus.name}.{r}" for r in missing]))
+            out.append(
+                Finding(
+                    "PF032",
+                    WARNING,
+                    f"{bus.name}: probes named for pin roles the bus does not use",
+                    [f"{bus.name}.{r}" for r in missing],
+                )
+            )
 
     for u in cfg.uart:
         if u.parity not in PARITIES:
-            out.append(Finding("PF033", ERROR, f"{u.name}: parity {u.parity!r} is not recognised",
-                               [u.name], f"expected one of {', '.join(PARITIES)}"))
+            out.append(
+                Finding(
+                    "PF033",
+                    ERROR,
+                    f"{u.name}: parity {u.parity!r} is not recognised",
+                    [u.name],
+                    f"expected one of {', '.join(PARITIES)}",
+                )
+            )
         if u.baud <= 0:
             out.append(Finding("PF034", ERROR, f"{u.name}: baud must be positive", [u.name]))
     for s in cfg.spi:
@@ -373,12 +453,25 @@ def _check_settings(cfg: FixtureConfig) -> list[Finding]:
             out.append(Finding("PF035", ERROR, f"{s.name}: SPI mode {s.mode} is not 0-3", [s.name]))
     for g in cfg.gpio:
         if g.direction not in DIRECTIONS:
-            out.append(Finding("PF036", ERROR,
-                               f"{g.name}: direction {g.direction!r} is not recognised", [g.name],
-                               f"expected one of {', '.join(DIRECTIONS)}"))
+            out.append(
+                Finding(
+                    "PF036",
+                    ERROR,
+                    f"{g.name}: direction {g.direction!r} is not recognised",
+                    [g.name],
+                    f"expected one of {', '.join(DIRECTIONS)}",
+                )
+            )
         if g.pull not in PULLS:
-            out.append(Finding("PF037", ERROR, f"{g.name}: pull {g.pull!r} is not recognised",
-                               [g.name], f"expected one of {', '.join(PULLS)}"))
+            out.append(
+                Finding(
+                    "PF037",
+                    ERROR,
+                    f"{g.name}: pull {g.pull!r} is not recognised",
+                    [g.name],
+                    f"expected one of {', '.join(PULLS)}",
+                )
+            )
     for a in cfg.adc:
         if a.divider <= 0:
             out.append(Finding("PF038", ERROR, f"{a.name}: divider must be positive", [a.name]))
@@ -395,17 +488,29 @@ def _check_against_board(cfg: FixtureConfig, board: Board) -> list[Finding]:
 
     unknown = sorted(claimed - available)
     if unknown:
-        out.append(Finding(
-            "PF040", ERROR, f"{len(unknown)} probes name signals the DUT does not have", unknown,
-            "the board has no test point for these, so the fixture cannot reach them"))
+        out.append(
+            Finding(
+                "PF040",
+                ERROR,
+                f"{len(unknown)} probes name signals the DUT does not have",
+                unknown,
+                "the board has no test point for these, so the fixture cannot reach them",
+            )
+        )
 
     unclaimed = sorted(available - claimed)
     if unclaimed:
         severity = ERROR if cfg.require_all_test_points else INFO
-        out.append(Finding(
-            "PF041", severity, f"{len(unclaimed)} DUT test points are not in the config", unclaimed,
-            "add a channel for each, or set dut.require_all_test_points to false to accept a "
-            "partial fixture"))
+        out.append(
+            Finding(
+                "PF041",
+                severity,
+                f"{len(unclaimed)} DUT test points are not in the config",
+                unclaimed,
+                "add a channel for each, or set dut.require_all_test_points to false to accept a "
+                "partial fixture",
+            )
+        )
 
     for a in cfg.adc:
         if not a.probe:
@@ -414,11 +519,16 @@ def _check_against_board(cfg: FixtureConfig, board: Board) -> list[Finding]:
         if probe and a.nominal_v is not None:
             measured = a.nominal_v / a.divider
             if measured > cfg.logic_voltage:
-                out.append(Finding(
-                    "PF042", ERROR,
-                    f"{a.name}: {a.nominal_v} V through a {a.divider}:1 divider presents "
-                    f"{measured:.2f} V to the ADC", [a.name],
-                    f"the ADC reference is {cfg.logic_voltage} V; increase the divider"))
+                out.append(
+                    Finding(
+                        "PF042",
+                        ERROR,
+                        f"{a.name}: {a.nominal_v} V through a {a.divider}:1 divider presents "
+                        f"{measured:.2f} V to the ADC",
+                        [a.name],
+                        f"the ADC reference is {cfg.logic_voltage} V; increase the divider",
+                    )
+                )
     return out
 
 
@@ -433,9 +543,15 @@ def validate(cfg: FixtureConfig, board: Board | None = None) -> list[Finding]:
     if board is not None:
         findings += _check_against_board(cfg, board)
     elif cfg.dut_board:
-        findings.append(Finding(
-            "PF002", WARNING, "the DUT board was not read, so probe names are unchecked",
-            [cfg.dut_board], "pass the board so the config can be held against it"))
+        findings.append(
+            Finding(
+                "PF002",
+                WARNING,
+                "the DUT board was not read, so probe names are unchecked",
+                [cfg.dut_board],
+                "pass the board so the config can be held against it",
+            )
+        )
 
     order = {ERROR: 0, WARNING: 1, INFO: 2}
     return sorted(findings, key=lambda f: (order[f.severity], f.code))

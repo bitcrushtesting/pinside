@@ -1,0 +1,12 @@
+# LF everywhere, including on Windows checkouts: the generated shell scripts and
+# the C the firmware compiles both care, and a CRLF run.sh fails confusingly.
+* text=auto eol=lf
+
+*.png binary
+*.pdf binary
+*.kicad_pcb text eol=lf
+*.kicad_sch text eol=lf
+
+# The C templates are the product; show them as C in diffs and language stats.
+src/pinside/firmware/templates/*.c linguist-language=C
+src/pinside/firmware/templates/*.h linguist-language=C

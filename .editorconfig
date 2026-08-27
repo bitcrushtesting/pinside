@@ -1,0 +1,41 @@
+# Matches the .editorconfig in the sibling Testladen repositories, with one
+# difference: the C here is formatted at 2 spaces by clang-format rather than
+# left to the editor, so those settings are unset and .clang-format decides.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+# C sources are formatted by clang-format; see .clang-format.
+[*.{c,h}]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+indent_style = unset
+indent_size = unset
+max_line_length = unset
+
+[*.py]
+indent_size = 4
+
+[*.{json,yml,yaml,toml}]
+indent_size = 2
+
+[*.sh]
+indent_size = 4
+
+[Makefile]
+indent_style = tab
+
+# A trailing double space is a line break in Markdown.
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = unset

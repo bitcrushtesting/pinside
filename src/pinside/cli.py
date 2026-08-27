@@ -24,9 +24,13 @@ def _print_findings(findings, stream=sys.stderr) -> None:
 
 
 def _limits_from(args) -> Limits:
-    return Limits(probe_pitch=args.probe_pitch, edge_clearance=args.edge_clearance,
-                  hole_clearance=args.hole_clearance, min_pad_diameter=args.min_pad,
-                  min_mounting_holes=args.min_holes)
+    return Limits(
+        probe_pitch=args.probe_pitch,
+        edge_clearance=args.edge_clearance,
+        hole_clearance=args.hole_clearance,
+        min_pad_diameter=args.min_pad,
+        min_mounting_holes=args.min_holes,
+    )
 
 
 # --------------------------------------------------------------------------- commands
@@ -45,12 +49,11 @@ def cmd_check(args) -> int:
         ignored = {c.strip().upper() for c in args.ignore.split(",") if c.strip()}
         findings = [f for f in findings if f.code not in ignored]
 
-    handle = open(args.output, "w", encoding="utf-8") if args.output else sys.stdout
-    try:
-        FORMATS[args.format](board, findings, handle)
-    finally:
-        if args.output:
-            handle.close()
+    if args.output:
+        with Path(args.output).open("w", encoding="utf-8") as handle:
+            FORMATS[args.format](board, findings, handle)
+    else:
+        FORMATS[args.format](board, findings, sys.stdout)
 
     # The table and JSON formats carry the findings themselves; the rest need stderr.
     if findings and (args.format in ("csv", "svg") or args.output):
@@ -79,8 +82,11 @@ def cmd_init(args) -> int:
         absolute = str(Path(args.board).resolve())
         board_path = absolute
         try:
-            relative = str(Path(args.board).resolve().relative_to(
-                Path(args.output).resolve().parent, walk_up=True))
+            relative = str(
+                Path(args.board)
+                .resolve()
+                .relative_to(Path(args.output).resolve().parent, walk_up=True)
+            )
             if len(relative) < len(absolute):
                 board_path = relative
         except (ValueError, TypeError):
@@ -100,13 +106,19 @@ def cmd_init(args) -> int:
         print(text, end="")
 
     # Say plainly that this is a draft: the names decided the grouping, and names can mislead.
-    unclaimed = [t.signal for t in board.test_points
-                 if t.signal and not t.is_ground and t.bus == "control"]
+    unclaimed = [
+        t.signal for t in board.test_points if t.signal and not t.is_ground and t.bus == "control"
+    ]
     if unclaimed:
-        print(f"pinside: {len(unclaimed)} signals were not recognised as belonging to a bus and "
-              f"became plain GPIO channels: {', '.join(sorted(unclaimed))}", file=sys.stderr)
-    print("pinside: this is a draft -- check the bus grouping and directions before generating",
-          file=sys.stderr)
+        print(
+            f"pinside: {len(unclaimed)} signals were not recognised as belonging to a bus and "
+            f"became plain GPIO channels: {', '.join(sorted(unclaimed))}",
+            file=sys.stderr,
+        )
+    print(
+        "pinside: this is a draft -- check the bus grouping and directions before generating",
+        file=sys.stderr,
+    )
     return EXIT_OK
 
 
@@ -126,8 +138,7 @@ def cmd_generate(args) -> int:
         _print_findings(findings, sys.stdout)
         if any(f.severity == ERROR for f in findings):
             return EXIT_ERROR
-        print(f"pinside: {cfg.name} validates against "
-              f"{cfg.mcu} and {cfg.dut_board or 'no board'}")
+        print(f"pinside: {cfg.name} validates against {cfg.mcu} and {cfg.dut_board or 'no board'}")
         return EXIT_OK
 
     try:
@@ -139,10 +150,15 @@ def cmd_generate(args) -> int:
 
     if result.findings:
         _print_findings(result.findings)
-    print(f"pinside: wrote {len(result.files)} files to {result.out_dir} "
-          f"(config {result.config_hash})", file=sys.stderr)
-    print(f"pinside: build with cmake, or run {result.out_dir}/test/run.sh for the host tests",
-          file=sys.stderr)
+    print(
+        f"pinside: wrote {len(result.files)} files to {result.out_dir} "
+        f"(config {result.config_hash})",
+        file=sys.stderr,
+    )
+    print(
+        f"pinside: build with cmake, or run {result.out_dir}/test/run.sh for the host tests",
+        file=sys.stderr,
+    )
 
     if args.strict and any(f.severity == WARNING for f in result.findings):
         return EXIT_WARN
@@ -156,51 +172,86 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pinside",
         description="Extract test points, mounting holes and the board outline from a "
-                    ".kicad_pcb, check whether a bed-of-nails fixture can be built from them, "
-                    "and generate firmware that matches the board.",
+        ".kicad_pcb, check whether a bed-of-nails fixture can be built from them, "
+        "and generate firmware that matches the board.",
         epilog="Exit status: 0 clean, 1 warnings under --strict, 2 errors, 3 bad usage. "
-               "KiCad files are only ever read.")
+        "KiCad files are only ever read.",
+    )
     p.add_argument("--version", action="version", version=f"pinside {__version__}")
 
     sub = p.add_subparsers(dest="command")
     strict_help = "exit non-zero on warnings as well as errors"
 
     check = sub.add_parser(
-        "check", help="report the board's geometry and whether a fixture can be built",
+        "check",
+        help="report the board's geometry and whether a fixture can be built",
         description="Read a .kicad_pcb and report every probe, mounting hole and outline "
-                    "segment, together with anything that would make a fixture fail.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+        "segment, together with anything that would make a fixture fail.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     check.add_argument("board", help="path to the DUT's .kicad_pcb")
     check.add_argument("-f", "--format", choices=sorted(FORMATS), default="table")
     check.add_argument("-o", "--output", help="write here instead of stdout")
-    check.add_argument("--origin", choices=["page", "outline"], default="outline",
-                       help="fixture-frame origin")
-    check.add_argument("--mirror", choices=["none", "x", "y"], default="none",
-                       help="mirror the fixture frame; 'x' suits a DUT laid face-down")
+    check.add_argument(
+        "--origin", choices=["page", "outline"], default="outline", help="fixture-frame origin"
+    )
+    check.add_argument(
+        "--mirror",
+        choices=["none", "x", "y"],
+        default="none",
+        help="mirror the fixture frame; 'x' suits a DUT laid face-down",
+    )
     d = Limits()
-    limits = check.add_argument_group("fixture limits",
-                                      "the physical facts the checks are measured against")
-    limits.add_argument("--probe-pitch", type=float, default=d.probe_pitch,
-                        help="minimum centre-to-centre spacing of two receptacles, mm")
-    limits.add_argument("--edge-clearance", type=float, default=d.edge_clearance,
-                        help="minimum probe-centre to board-edge distance, mm")
-    limits.add_argument("--hole-clearance", type=float, default=d.hole_clearance,
-                        help="minimum gap between a probe pad and a mounting-hole pad, mm")
-    limits.add_argument("--min-pad", type=float, default=d.min_pad_diameter,
-                        help="smallest DUT test pad a spring tip can be trusted to hit, mm")
-    limits.add_argument("--min-holes", type=int, default=d.min_mounting_holes,
-                        help="mounting holes needed to locate the board")
-    check.add_argument("--ignore", metavar="CODES", default="",
-                       help="comma-separated finding codes to suppress, e.g. PS041,PS042")
+    limits = check.add_argument_group(
+        "fixture limits", "the physical facts the checks are measured against"
+    )
+    limits.add_argument(
+        "--probe-pitch",
+        type=float,
+        default=d.probe_pitch,
+        help="minimum centre-to-centre spacing of two receptacles, mm",
+    )
+    limits.add_argument(
+        "--edge-clearance",
+        type=float,
+        default=d.edge_clearance,
+        help="minimum probe-centre to board-edge distance, mm",
+    )
+    limits.add_argument(
+        "--hole-clearance",
+        type=float,
+        default=d.hole_clearance,
+        help="minimum gap between a probe pad and a mounting-hole pad, mm",
+    )
+    limits.add_argument(
+        "--min-pad",
+        type=float,
+        default=d.min_pad_diameter,
+        help="smallest DUT test pad a spring tip can be trusted to hit, mm",
+    )
+    limits.add_argument(
+        "--min-holes",
+        type=int,
+        default=d.min_mounting_holes,
+        help="mounting holes needed to locate the board",
+    )
+    check.add_argument(
+        "--ignore",
+        metavar="CODES",
+        default="",
+        help="comma-separated finding codes to suppress, e.g. PS041,PS042",
+    )
     check.add_argument("--no-checks", action="store_true", help="extract only, run no checks")
     check.add_argument("--strict", action="store_true", help=strict_help)
     check.set_defaults(func=cmd_check)
 
     init = sub.add_parser(
-        "init", help="draft a fixture config from a board",
+        "init",
+        help="draft a fixture config from a board",
         description="Read a board and write a fixture config covering every test point on it. "
-                    "The grouping comes from the signal names, so treat the result as a draft.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+        "The grouping comes from the signal names, so treat the result as a draft.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     init.add_argument("board", help="path to the DUT's .kicad_pcb")
     init.add_argument("-o", "--output", help="write here instead of stdout")
     init.add_argument("--mcu", default="rp2350b", help="target microcontroller")
@@ -208,18 +259,22 @@ def build_parser() -> argparse.ArgumentParser:
     init.set_defaults(func=cmd_init, strict=False)
 
     gen = sub.add_parser(
-        "generate", help="generate firmware from a fixture config",
+        "generate",
+        help="generate firmware from a fixture config",
         description="Validate a fixture config against its target microcontroller and its DUT "
-                    "board, then write a buildable Pico SDK project with host tests. Nothing is "
-                    "written if the config does not validate.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+        "board, then write a buildable Pico SDK project with host tests. Nothing is "
+        "written if the config does not validate.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     gen.add_argument("config", help="path to the fixture config JSON")
     gen.add_argument("--out", default="firmware", help="directory to write the project into")
     gen.add_argument("--board", help="use this .kicad_pcb instead of the one the config names")
-    gen.add_argument("--force", action="store_true",
-                     help="write into a non-empty directory pinside did not create")
-    gen.add_argument("--dry-run", action="store_true",
-                     help="validate and report, writing nothing")
+    gen.add_argument(
+        "--force",
+        action="store_true",
+        help="write into a non-empty directory pinside did not create",
+    )
+    gen.add_argument("--dry-run", action="store_true", help="validate and report, writing nothing")
     gen.add_argument("--strict", action="store_true", help=strict_help)
     gen.set_defaults(func=cmd_generate)
 

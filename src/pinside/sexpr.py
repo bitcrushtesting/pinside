@@ -11,8 +11,9 @@ UUID cross-references KiCad relies on, so pinside never does it.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
-__all__ = ["tokenize", "parse", "load", "find_all", "child", "children", "floats", "atom"]
+__all__ = ["atom", "child", "children", "find_all", "floats", "load", "parse", "tokenize"]
 
 _TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|\(|\)|[^\s()]+')
 
@@ -45,8 +46,7 @@ def parse(tokens: list[str]) -> list:
 
 
 def load(path: str) -> list:
-    with open(path, encoding="utf-8") as handle:
-        return parse(tokenize(handle.read()))
+    return parse(tokenize(Path(path).read_text(encoding="utf-8")))
 
 
 def find_all(node, tag: str) -> list[Node]:

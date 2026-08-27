@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from itertools import pairwise
 
-from .board import Board, TestPoint
+from .board import Board
 from .geometry import BBox
 
 ERROR, WARNING, INFO = "error", "warning", "info"
@@ -21,13 +22,13 @@ ERROR, WARNING, INFO = "error", "warning", "info"
 class Limits:
     """The physical facts a fixture is built from. Defaults suit a Mill-Max 0985 receptacle."""
 
-    probe_pitch: float = 2.54          # centre-to-centre minimum between two receptacles
-    edge_clearance: float = 2.0        # probe centre to board edge
-    hole_clearance: float = 1.0        # probe pad edge to mounting-hole pad edge
-    min_pad_diameter: float = 0.9      # DUT pad the spring tip has to land on
-    min_mounting_holes: int = 3        # three points locate a plane; two let the board pivot
-    grid_tolerance: float = 0.01       # how exactly a coordinate must sit on a lattice, mm
-    grid_fraction: float = 0.7         # share of probes on it before we call it an import grid
+    probe_pitch: float = 2.54  # centre-to-centre minimum between two receptacles
+    edge_clearance: float = 2.0  # probe centre to board edge
+    hole_clearance: float = 1.0  # probe pad edge to mounting-hole pad edge
+    min_pad_diameter: float = 0.9  # DUT pad the spring tip has to land on
+    min_mounting_holes: int = 3  # three points locate a plane; two let the board pivot
+    grid_tolerance: float = 0.01  # how exactly a coordinate must sit on a lattice, mm
+    grid_fraction: float = 0.7  # share of probes on it before we call it an import grid
 
 
 @dataclass
@@ -39,8 +40,13 @@ class Finding:
     detail: str = ""
 
     def as_dict(self) -> dict:
-        return {"code": self.code, "severity": self.severity, "summary": self.summary,
-                "refs": self.refs, "detail": self.detail}
+        return {
+            "code": self.code,
+            "severity": self.severity,
+            "summary": self.summary,
+            "refs": self.refs,
+            "detail": self.detail,
+        }
 
     def __str__(self) -> str:
         refs = f" [{', '.join(self.refs)}]" if self.refs else ""
@@ -58,10 +64,10 @@ def _lattice_fraction(values: list[float], tolerance: float) -> tuple[float, flo
     Returns (pitch, fraction). A fresh netlist import puts every footprint on one exact lattice;
     a laid-out board does not, even when parts happen to line up in rows.
     """
-    uniq = sorted(set(round(v, 4) for v in values))
+    uniq = sorted({round(v, 4) for v in values})
     if len(uniq) < 3:
         return 0.0, 0.0
-    steps = [round(b - a, 4) for a, b in zip(uniq, uniq[1:]) if b - a > tolerance]
+    steps = [round(b - a, 4) for a, b in pairwise(uniq) if b - a > tolerance]
     if not steps:
         return 0.0, 0.0
     pitch = min(steps, key=lambda s: (-steps.count(s), s))  # most common, smallest on a tie
@@ -72,9 +78,10 @@ def _lattice_fraction(values: list[float], tolerance: float) -> tuple[float, flo
     # coordinate instead lets one stray part outside the block shift the whole lattice and hide
     # the very pattern we are looking for.
     residues = [v % pitch for v in values]
-    best = max(sum(1 for r in residues
-                   if min(abs(r - c), pitch - abs(r - c)) <= tolerance)
-               for c in residues)
+    best = max(
+        sum(1 for r in residues if min(abs(r - c), pitch - abs(r - c)) <= tolerance)
+        for c in residues
+    )
     return pitch, best / len(values)
 
 
@@ -83,12 +90,24 @@ def _lattice_fraction(values: list[float], tolerance: float) -> tuple[float, flo
 
 def check_outline(board: Board, limits: Limits) -> list[Finding]:
     if not board.outline.segments:
-        return [Finding("PS001", ERROR, "no Edge.Cuts outline: the board size is unknown",
-                        detail="every geometric check below is disabled without one")]
+        return [
+            Finding(
+                "PS001",
+                ERROR,
+                "no Edge.Cuts outline: the board size is unknown",
+                detail="every geometric check below is disabled without one",
+            )
+        ]
     if not board.outline.closed:
-        return [Finding("PS002", ERROR, "the Edge.Cuts outline does not close into one ring",
-                        detail="KiCad cannot fill zones and the fab cannot mill it; "
-                               "checks fall back to the bounding box")]
+        return [
+            Finding(
+                "PS002",
+                ERROR,
+                "the Edge.Cuts outline does not close into one ring",
+                detail="KiCad cannot fill zones and the fab cannot mill it; "
+                "checks fall back to the bounding box",
+            )
+        ]
     return []
 
 
@@ -100,16 +119,26 @@ def check_placement(board: Board, limits: Limits) -> list[Finding]:
     stray_holes = [h.ref for h in board.mounting_holes if not board.outline.contains(h.x, h.y)]
     out = []
     if stray:
-        out.append(Finding(
-            "PS010", ERROR,
-            f"{len(stray)} of {len(board.test_points)} test points sit outside the board outline",
-            stray,
-            "these are still at their netlist-import positions, so their coordinates are not a "
-            "placement -- do not cut a fixture from them"))
+        out.append(
+            Finding(
+                "PS010",
+                ERROR,
+                f"{len(stray)} of {len(board.test_points)} test points sit outside "
+                "the board outline",
+                stray,
+                "these are still at their netlist-import positions, so their coordinates are not a "
+                "placement -- do not cut a fixture from them",
+            )
+        )
     if stray_holes:
-        out.append(Finding("PS011", ERROR,
-                           f"{len(stray_holes)} mounting holes sit outside the board outline",
-                           stray_holes))
+        out.append(
+            Finding(
+                "PS011",
+                ERROR,
+                f"{len(stray_holes)} mounting holes sit outside the board outline",
+                stray_holes,
+            )
+        )
     return out
 
 
@@ -132,10 +161,14 @@ def check_import_grid(board: Board, limits: Limits) -> list[Finding]:
     if abs(pitch_x - pitch_y) > limits.grid_tolerance:
         return []
     share = min(frac_x, frac_y)
-    return [Finding(
-        "PS012", WARNING,
-        f"{share:.0%} of test points lie on a uniform {pitch_x:g} mm lattice",
-        detail="that is KiCad's default spread for freshly imported footprints, not a layout")]
+    return [
+        Finding(
+            "PS012",
+            WARNING,
+            f"{share:.0%} of test points lie on a uniform {pitch_x:g} mm lattice",
+            detail="that is KiCad's default spread for freshly imported footprints, not a layout",
+        )
+    ]
 
 
 def check_stacked(board: Board, limits: Limits) -> list[Finding]:
@@ -147,8 +180,15 @@ def check_stacked(board: Board, limits: Limits) -> list[Finding]:
             clashes.append(f"{seen[key]}+{t.ref}")
         seen[key] = t.ref
     if clashes:
-        return [Finding("PS020", ERROR, f"{len(clashes)} test points share a position",
-                        clashes, "one probe cannot serve two nets")]
+        return [
+            Finding(
+                "PS020",
+                ERROR,
+                f"{len(clashes)} test points share a position",
+                clashes,
+                "one probe cannot serve two nets",
+            )
+        ]
     return []
 
 
@@ -159,10 +199,16 @@ def check_pitch(board: Board, limits: Limits) -> list[Finding]:
         if 0 < d < limits.probe_pitch:
             tight.append(f"{a.ref}-{b.ref} {d:.2f}mm")
     if tight:
-        return [Finding("PS021", ERROR,
-                        f"{len(tight)} probe pairs are closer than the {limits.probe_pitch} mm "
-                        "receptacle pitch", tight,
-                        "the receptacle bodies collide; move the pads or use a finer probe")]
+        return [
+            Finding(
+                "PS021",
+                ERROR,
+                f"{len(tight)} probe pairs are closer than the {limits.probe_pitch} mm "
+                "receptacle pitch",
+                tight,
+                "the receptacle bodies collide; move the pads or use a finer probe",
+            )
+        ]
     return []
 
 
@@ -175,9 +221,15 @@ def check_edge_clearance(board: Board, limits: Limits) -> list[Finding]:
         if d is not None and d < limits.edge_clearance and board.outline.contains(t.x, t.y):
             close.append(f"{t.ref} {d:.2f}mm")
     if close:
-        return [Finding("PS022", WARNING,
-                        f"{len(close)} probes are within {limits.edge_clearance} mm of the board edge",
-                        close, "the fixture wall and any board-edge chamfer live here")]
+        return [
+            Finding(
+                "PS022",
+                WARNING,
+                f"{len(close)} probes are within {limits.edge_clearance} mm of the board edge",
+                close,
+                "the fixture wall and any board-edge chamfer live here",
+            )
+        ]
     return []
 
 
@@ -191,9 +243,15 @@ def check_hole_clearance(board: Board, limits: Limits) -> list[Finding]:
             if gap < limits.hole_clearance:
                 close.append(f"{t.ref}-{h.ref} {gap:.2f}mm")
     if close:
-        return [Finding("PS023", WARNING,
-                        f"{len(close)} probes crowd a mounting hole", close,
-                        "the standoff or screw head sits on that pad")]
+        return [
+            Finding(
+                "PS023",
+                WARNING,
+                f"{len(close)} probes crowd a mounting hole",
+                close,
+                "the standoff or screw head sits on that pad",
+            )
+        ]
     return []
 
 
@@ -208,19 +266,34 @@ def check_obstructions(board: Board, limits: Limits) -> list[Finding]:
             if box and box.contains(t.x, t.y):
                 hits.append(f"{t.ref} in {fp.ref}")
     if hits:
-        return [Finding("PS024", ERROR,
-                        f"{len(hits)} probes land inside another footprint's pad envelope", hits,
-                        "the spring pin would strike the component, not the test pad")]
+        return [
+            Finding(
+                "PS024",
+                ERROR,
+                f"{len(hits)} probes land inside another footprint's pad envelope",
+                hits,
+                "the spring pin would strike the component, not the test pad",
+            )
+        ]
     return []
 
 
 def check_pad_size(board: Board, limits: Limits) -> list[Finding]:
-    small = [f"{t.ref} {t.pad.min_dimension:g}mm" for t in board.test_points
-             if t.pad and t.pad.size and t.pad.min_dimension < limits.min_pad_diameter]
+    small = [
+        f"{t.ref} {t.pad.min_dimension:g}mm"
+        for t in board.test_points
+        if t.pad and t.pad.size and t.pad.min_dimension < limits.min_pad_diameter
+    ]
     if small:
-        return [Finding("PS025", WARNING,
-                        f"{len(small)} test pads are under {limits.min_pad_diameter} mm across",
-                        small, "a spring tip plus placement tolerance needs more target than that")]
+        return [
+            Finding(
+                "PS025",
+                WARNING,
+                f"{len(small)} test pads are under {limits.min_pad_diameter} mm across",
+                small,
+                "a spring tip plus placement tolerance needs more target than that",
+            )
+        ]
     return []
 
 
@@ -228,9 +301,16 @@ def check_sides(board: Board, limits: Limits) -> list[Finding]:
     sides = {t.side for t in board.test_points}
     if len(sides) > 1:
         bottom = [t.ref for t in board.test_points if t.side == "bottom"]
-        return [Finding("PS026", WARNING, "test points are on both sides of the board", bottom,
-                        "a single-sided fixture cannot reach the ones listed; "
-                        "you need a clamshell or a second plate")]
+        return [
+            Finding(
+                "PS026",
+                WARNING,
+                "test points are on both sides of the board",
+                bottom,
+                "a single-sided fixture cannot reach the ones listed; "
+                "you need a clamshell or a second plate",
+            )
+        ]
     return []
 
 
@@ -238,19 +318,37 @@ def check_ground(board: Board, limits: Limits) -> list[Finding]:
     out = []
     grounds = [t.ref for t in board.test_points if t.is_ground]
     if not grounds:
-        out.append(Finding(
-            "PS030", ERROR, "no ground test point",
-            detail="every probed signal is measured against a return path that does not exist; "
-                   "add at least two ground pads before building a fixture"))
+        out.append(
+            Finding(
+                "PS030",
+                ERROR,
+                "no ground test point",
+                detail="every probed signal is measured against a return path that does not exist; "
+                "add at least two ground pads before building a fixture",
+            )
+        )
     elif len(grounds) < 2:
-        out.append(Finding("PS031", WARNING, "only one ground test point", grounds,
-                           "a second one halves the return inductance and guards against a "
-                           "single bad contact"))
+        out.append(
+            Finding(
+                "PS031",
+                WARNING,
+                "only one ground test point",
+                grounds,
+                "a second one halves the return inductance and guards against a single bad contact",
+            )
+        )
     ungrounded = [h.ref for h in board.mounting_holes if h.plated and not h.net]
     if ungrounded:
-        out.append(Finding(
-            "PS032", INFO, f"{len(ungrounded)} plated mounting holes carry no net", ungrounded,
-            "netting them to GND turns the fixture standoffs into a free, low-inductance return"))
+        out.append(
+            Finding(
+                "PS032",
+                INFO,
+                f"{len(ungrounded)} plated mounting holes carry no net",
+                ungrounded,
+                "netting them to GND turns the fixture standoffs into a free, "
+                "low-inductance return",
+            )
+        )
     return out
 
 
@@ -258,14 +356,27 @@ def check_nets(board: Board, limits: Limits) -> list[Finding]:
     out = []
     unnetted = [t.ref for t in board.test_points if not t.net]
     if unnetted:
-        out.append(Finding("PS040", WARNING, f"{len(unnetted)} test points have no net", unnetted,
-                           "they probe nothing; either wire them or delete them"))
+        out.append(
+            Finding(
+                "PS040",
+                WARNING,
+                f"{len(unnetted)} test points have no net",
+                unnetted,
+                "they probe nothing; either wire them or delete them",
+            )
+        )
     anonymous = [t.ref for t in board.test_points if t.net and t.anonymous_net]
     if anonymous:
-        out.append(Finding(
-            "PS041", INFO, f"{len(anonymous)} test points sit on auto-named nets", anonymous,
-            "KiCad named these, not you -- label them in the schematic so the fixture, the "
-            "firmware and the test report all use one name"))
+        out.append(
+            Finding(
+                "PS041",
+                INFO,
+                f"{len(anonymous)} test points sit on auto-named nets",
+                anonymous,
+                "KiCad named these, not you -- label them in the schematic so the fixture, the "
+                "firmware and the test report all use one name",
+            )
+        )
 
     by_net: dict[str, list[str]] = {}
     for t in board.test_points:
@@ -274,8 +385,15 @@ def check_nets(board: Board, limits: Limits) -> list[Finding]:
             by_net.setdefault(t.net, []).append(t.ref)
     dupes = [f"{net}: {'+'.join(refs)}" for net, refs in by_net.items() if len(refs) > 1]
     if dupes:
-        out.append(Finding("PS042", INFO, f"{len(dupes)} signal nets carry more than one test point",
-                           dupes, "deliberate for a power rail, a wasted fixture channel otherwise"))
+        out.append(
+            Finding(
+                "PS042",
+                INFO,
+                f"{len(dupes)} signal nets carry more than one test point",
+                dupes,
+                "deliberate for a power rail, a wasted fixture channel otherwise",
+            )
+        )
     return out
 
 
@@ -283,16 +401,27 @@ def check_mounting(board: Board, limits: Limits) -> list[Finding]:
     out = []
     holes = board.mounting_holes
     if len(holes) < limits.min_mounting_holes:
-        out.append(Finding(
-            "PS050", WARNING,
-            f"{len(holes)} mounting holes: fewer than the {limits.min_mounting_holes} needed to "
-            "locate the board", [h.ref for h in holes],
-            "with fewer, the DUT can pivot or rock and contact becomes intermittent"))
+        out.append(
+            Finding(
+                "PS050",
+                WARNING,
+                f"{len(holes)} mounting holes: fewer than the "
+                f"{limits.min_mounting_holes} needed to locate the board",
+                [h.ref for h in holes],
+                "with fewer, the DUT can pivot or rock and contact becomes intermittent",
+            )
+        )
     drills = {round(h.drill, 3) for h in holes if h.drill}
     if len(drills) > 1:
-        out.append(Finding("PS051", INFO, "mounting holes have differing drill sizes",
-                           [f"{h.ref} {h.drill}mm" for h in holes if h.drill],
-                           "the fixture needs matching hardware per hole"))
+        out.append(
+            Finding(
+                "PS051",
+                INFO,
+                "mounting holes have differing drill sizes",
+                [f"{h.ref} {h.drill}mm" for h in holes if h.drill],
+                "the fixture needs matching hardware per hole",
+            )
+        )
 
     if holes and board.test_points:
         hx = [h.x for h in holes]
@@ -301,18 +430,36 @@ def check_mounting(board: Board, limits: Limits) -> list[Finding]:
         outside = [t.ref for t in board.test_points if not span.contains(t.x, t.y)]
         # Only meaningful once the probes are actually placed.
         placed = board.outline.segments and all(
-            board.outline.contains(t.x, t.y) for t in board.test_points)
+            board.outline.contains(t.x, t.y) for t in board.test_points
+        )
         if outside and placed:
-            out.append(Finding(
-                "PS052", INFO,
-                f"{len(outside)} probes lie outside the mounting-hole footprint", outside,
-                "the plate cantilevers past its supports there and contact force will vary"))
+            out.append(
+                Finding(
+                    "PS052",
+                    INFO,
+                    f"{len(outside)} probes lie outside the mounting-hole footprint",
+                    outside,
+                    "the plate cantilevers past its supports there and contact force will vary",
+                )
+            )
     return out
 
 
-CHECKS = [check_outline, check_placement, check_import_grid, check_stacked, check_pitch,
-          check_edge_clearance, check_hole_clearance, check_obstructions, check_pad_size,
-          check_sides, check_ground, check_nets, check_mounting]
+CHECKS = [
+    check_outline,
+    check_placement,
+    check_import_grid,
+    check_stacked,
+    check_pitch,
+    check_edge_clearance,
+    check_hole_clearance,
+    check_obstructions,
+    check_pad_size,
+    check_sides,
+    check_ground,
+    check_nets,
+    check_mounting,
+]
 
 _ORDER = {ERROR: 0, WARNING: 1, INFO: 2}
 

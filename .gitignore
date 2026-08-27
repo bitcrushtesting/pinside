@@ -4,4 +4,9 @@ __pycache__/
 build/
 dist/
 .venv/
+.venv-tools/
 .pytest_cache/
+.ruff_cache/
+
+# scripts/test.sh and the generated firmware's own tests build here.
+/tmp-firmware/

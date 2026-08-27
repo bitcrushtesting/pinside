@@ -7,26 +7,25 @@ import io
 import json
 import os
 import sys
-import tempfile
 import unittest
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(0, os.path.dirname(__file__))
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT / "src"))
+sys.path.insert(0, str(_ROOT / "tests"))
 
-import boards  # noqa: E402
-
-from pinside import read_board, run, transform  # noqa: E402
-from pinside.checks import ERROR, Limits  # noqa: E402
-from pinside.cli import main  # noqa: E402
-from pinside.geometry import chain_ring, point_in_ring, polyline_segments, rounded_rect_points  # noqa: E402
-from pinside.report import FORMATS  # noqa: E402
-
-
-def write(text: str) -> str:
-    handle = tempfile.NamedTemporaryFile("w", suffix=".kicad_pcb", delete=False, encoding="utf-8")
-    handle.write(text)
-    handle.close()
-    return handle.name
+import boards
+from boards import write
+from pinside import read_board, run, transform
+from pinside.checks import ERROR, Limits
+from pinside.cli import main
+from pinside.geometry import (
+    chain_ring,
+    point_in_ring,
+    polyline_segments,
+    rounded_rect_points,
+)
+from pinside.report import FORMATS
 
 
 def cli(args: list[str]) -> int:
@@ -49,8 +48,8 @@ class TestGeometry(unittest.TestCase):
     def test_fillet_corner_is_outside(self):
         ring = chain_ring(polyline_segments(rounded_rect_points((0, 0), (10, 10), 3)))
         self.assertTrue(point_in_ring((5, 5), ring))
-        self.assertFalse(point_in_ring((0.2, 0.2), ring))   # cut away by the fillet
-        self.assertTrue(point_in_ring((0.2, 5), ring))      # mid-edge, still inside
+        self.assertFalse(point_in_ring((0.2, 0.2), ring))  # cut away by the fillet
+        self.assertTrue(point_in_ring((0.2, 5), ring))  # mid-edge, still inside
 
     def test_open_outline_yields_no_ring(self):
         board = read_board(write(boards._wrap(boards.segment_outline(gap=True))))
@@ -88,16 +87,16 @@ class TestExtraction(unittest.TestCase):
     def test_origin_shifts_to_outline_corner(self):
         board = transform(read_board(write(boards.unplaced())), origin="outline")
         hole = next(h for h in board.mounting_holes if h.ref == "H1")
-        self.assertAlmostEqual(hole.fx, 5.0)   # 105 - 100
-        self.assertAlmostEqual(hole.fy, 5.0)   # 55 - 50
+        self.assertAlmostEqual(hole.fx, 5.0)  # 105 - 100
+        self.assertAlmostEqual(hole.fy, 5.0)  # 55 - 50
 
     def test_mirror_x_flips_within_the_outline(self):
         board = transform(read_board(write(boards.unplaced())), mirror="x")
         h1 = next(h for h in board.mounting_holes if h.ref == "H1")
         h2 = next(h for h in board.mounting_holes if h.ref == "H2")
-        self.assertAlmostEqual(h1.fx, 45.0)    # width 50 - 5
+        self.assertAlmostEqual(h1.fx, 45.0)  # width 50 - 5
         self.assertAlmostEqual(h2.fx, 5.0)
-        self.assertAlmostEqual(h1.fy, h2.fy)   # mirroring X leaves Y alone
+        self.assertAlmostEqual(h1.fy, h2.fy)  # mirroring X leaves Y alone
 
     def test_page_origin_keeps_raw_coordinates(self):
         board = transform(read_board(write(boards.unplaced())), origin="page")
@@ -111,27 +110,29 @@ class TestChecks(unittest.TestCase):
 
     def test_unplaced_board_reports_placement_and_grid(self):
         found = codes(boards.unplaced())
-        self.assertIn("PS010", found)   # outside the outline
-        self.assertIn("PS012", found)   # on the import lattice
-        self.assertIn("PS030", found)   # and no ground probe
+        self.assertIn("PS010", found)  # outside the outline
+        self.assertIn("PS012", found)  # on the import lattice
+        self.assertIn("PS030", found)  # and no ground probe
 
     def test_grid_check_does_not_fire_on_a_real_layout(self):
         self.assertNotIn("PS012", codes(boards.healthy()))
 
     def test_troubled_board_reports_each_defect(self):
         found = codes(boards.troubled())
-        for code in ["PS020",   # stacked probes
-                     "PS021",   # under the receptacle pitch
-                     "PS022",   # against the board edge
-                     "PS023",   # crowding a mounting hole
-                     "PS024",   # landing on a component
-                     "PS025",   # pad too small
-                     "PS026",   # probes on both sides
-                     "PS040",   # test point with no net
-                     "PS041",   # auto-named net
-                     "PS042",   # two probes on one net
-                     "PS050",   # too few mounting holes
-                     "PS051"]:  # mismatched drills
+        for code in [
+            "PS020",  # stacked probes
+            "PS021",  # under the receptacle pitch
+            "PS022",  # against the board edge
+            "PS023",  # crowding a mounting hole
+            "PS024",  # landing on a component
+            "PS025",  # pad too small
+            "PS026",  # probes on both sides
+            "PS040",  # test point with no net
+            "PS041",  # auto-named net
+            "PS042",  # two probes on one net
+            "PS050",  # too few mounting holes
+            "PS051",
+        ]:  # mismatched drills
             self.assertIn(code, found, f"expected {code}")
 
     def test_missing_outline_is_an_error(self):
@@ -148,11 +149,10 @@ class TestChecks(unittest.TestCase):
         self.assertNotIn("PS022", codes(boards.troubled(), loose))
 
     def test_one_ground_warns_and_two_do_not(self):
-        one = boards.healthy().replace(
-            boards._testpoint("TP91", 22, 20, "GND", value="GND"), "")
+        one = boards.healthy().replace(boards._testpoint("TP91", 22, 20, "GND", value="GND"), "")
         found = codes(one)
-        self.assertIn("PS031", found)      # only one ground probe
-        self.assertNotIn("PS030", found)   # but not "no ground at all"
+        self.assertIn("PS031", found)  # only one ground probe
+        self.assertNotIn("PS030", found)  # but not "no ground at all"
         self.assertNotIn("PS031", codes(boards.healthy()))
 
     def test_duplicate_ground_probes_are_not_flagged(self):
@@ -160,8 +160,8 @@ class TestChecks(unittest.TestCase):
 
     def test_missing_outline_still_reports_other_findings(self):
         found = codes(boards._wrap(boards._testpoint("TP1", 1, 1, "")))
-        self.assertIn("PS001", found)      # no outline
-        self.assertIn("PS040", found)      # and the netless probe is still noticed
+        self.assertIn("PS001", found)  # no outline
+        self.assertIn("PS040", found)  # and the netless probe is still noticed
 
 
 class TestCLI(unittest.TestCase):
@@ -180,7 +180,9 @@ class TestCLI(unittest.TestCase):
 
     def test_ignore_suppresses_a_code(self):
         path = write(boards.unplaced())
-        self.assertEqual(cli([path, "-f", "json", "-o", os.devnull, "--ignore", "PS010,PS012,PS030"]), 0)
+        self.assertEqual(
+            cli([path, "-f", "json", "-o", os.devnull, "--ignore", "PS010,PS012,PS030"]), 0
+        )
 
     def test_every_format_produces_output(self):
         board = transform(read_board(write(boards.troubled())))

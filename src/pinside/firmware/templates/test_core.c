@@ -21,9 +21,9 @@
 
 static int failures;
 static int checks;
-static const char *current;
+static const char* current;
 
-static void check(bool ok, const char *what) {
+static void check(bool ok, const char* what) {
   checks++;
   if (!ok) {
     failures++;
@@ -32,20 +32,20 @@ static void check(bool ok, const char *what) {
   }
 }
 
-static void begin(const char *name) {
+static void begin(const char* name) {
   current = name;
   mock_reset();
   fx_core_init();
-  mock.out_len = 0;   /* drop the ready notification; tests assert on what follows */
+  mock.out_len = 0; /* drop the ready notification; tests assert on what follows */
   mock.out[0] = '\0';
 }
 
-static void send(const char *line) {
+static void send(const char* line) {
   fx_core_feed(line, strlen(line));
   fx_core_feed("\n", 1);
 }
 
-static bool last_has(const char *needle) { return strstr(mock_last_line(), needle) != NULL; }
+static bool last_has(const char* needle) { return strstr(mock_last_line(), needle) != NULL; }
 
 /* ------------------------------------------------------------------ tests */
 
@@ -117,18 +117,20 @@ static void test_gpio(void) {
   check(last_has("-32602"), "a missing channel parameter is rejected");
 
   char req[256];
-  snprintf(req, sizeof(req),
-           "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"gpio.read\",\"params\":{\"channel\":\"%s\"}}",
-           fx_gpio[0].name);
+  snprintf(
+      req, sizeof(req),
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"gpio.read\",\"params\":{\"channel\":\"%s\"}}",
+      fx_gpio[0].name);
   send(req);
   check(last_has("\"level\":"), "read reports a level");
   check(last_has("\"asserted\":"), "read reports assertion, not just the raw level");
 
   for (size_t i = 0; i < fx_gpio_count; i++) {
-    const fx_gpio_desc *g = &fx_gpio[i];
+    const fx_gpio_desc* g = &fx_gpio[i];
     snprintf(req, sizeof(req),
              "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"gpio.write\","
-             "\"params\":{\"channel\":\"%s\",\"assert\":true}}", g->name);
+             "\"params\":{\"channel\":\"%s\",\"assert\":true}}",
+             g->name);
     send(req);
     if (g->direction == FX_DIR_INPUT) {
       check(last_has("-32002"), "an input channel refuses writes");
@@ -142,7 +144,8 @@ static void test_gpio(void) {
 
     snprintf(req, sizeof(req),
              "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"gpio.write\","
-             "\"params\":{\"channel\":\"%s\",\"assert\":false}}", g->name);
+             "\"params\":{\"channel\":\"%s\",\"assert\":false}}",
+             g->name);
     send(req);
     if (g->direction == FX_DIR_OPEN_DRAIN)
       check(mock.floating[g->pin], "releasing an open-drain channel lets the line float");
@@ -152,7 +155,7 @@ static void test_gpio(void) {
 static void test_adc_scaling(void) {
   if (fx_adc_count == 0) return;
   begin("adc");
-  const fx_adc_desc *a = &fx_adc[0];
+  const fx_adc_desc* a = &fx_adc[0];
   /* Half of full scale is 1650 mV at the pin, times the divider ratio. */
   mock.adc[a->adc] = 2047;
   long expect = (long)((uint64_t)(2047u * 3300u / 4095u) * a->divider_milli / 1000u);
@@ -173,12 +176,13 @@ static void test_adc_scaling(void) {
 static void test_uart(void) {
   if (fx_uart_count == 0) return;
   begin("uart");
-  const fx_uart_desc *u = &fx_uart[0];
+  const fx_uart_desc* u = &fx_uart[0];
   char req[512];
 
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"uart.write\","
-           "\"params\":{\"channel\":\"%s\",\"hex\":\"48656c6c6f\"}}", u->name);
+           "\"params\":{\"channel\":\"%s\",\"hex\":\"48656c6c6f\"}}",
+           u->name);
   send(req);
   if (u->guard >= 0 && !fx_gpio[u->guard].initial_asserted) {
     check(last_has("-32003"), "a guarded bus refuses to transmit until the guard is asserted");
@@ -190,7 +194,8 @@ static void test_uart(void) {
 
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"uart.write\","
-           "\"params\":{\"channel\":\"%s\",\"hex\":\"abc\"}}", u->name);
+           "\"params\":{\"channel\":\"%s\",\"hex\":\"abc\"}}",
+           u->name);
   send(req);
   check(last_has("-32602"), "odd-length hex is rejected");
 
@@ -198,20 +203,22 @@ static void test_uart(void) {
   mock.uart_rx_len[u->index] = 2;
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"uart.read\","
-           "\"params\":{\"channel\":\"%s\",\"max\":16}}", u->name);
+           "\"params\":{\"channel\":\"%s\",\"max\":16}}",
+           u->name);
   send(req);
   check(last_has("\"hex\":\"4f4b\""), "reads come back as hex");
   check(last_has("\"length\":2"), "with a length");
 
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"uart.configure\","
-           "\"params\":{\"channel\":\"%s\",\"baud\":9600}}", u->name);
+           "\"params\":{\"channel\":\"%s\",\"baud\":9600}}",
+           u->name);
   send(req);
   check(mock.uart_baud[u->index] == 9600, "the baud rate can be changed at runtime");
 }
 
 static void test_uart_streaming(void) {
-  const fx_uart_desc *streamed = NULL;
+  const fx_uart_desc* streamed = NULL;
   for (size_t i = 0; i < fx_uart_count; i++)
     if (fx_uart[i].stream) streamed = &fx_uart[i];
   if (!streamed) return;
@@ -234,7 +241,7 @@ static void test_uart_streaming(void) {
 static void test_i2c(void) {
   if (fx_i2c_count == 0) return;
   begin("i2c");
-  const fx_i2c_desc *b = &fx_i2c[0];
+  const fx_i2c_desc* b = &fx_i2c[0];
   bool guarded = b->guard >= 0 && !fx_gpio[b->guard].initial_asserted;
   char req[512];
 
@@ -253,25 +260,29 @@ static void test_i2c(void) {
 
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"i2c.read\","
-           "\"params\":{\"channel\":\"%s\",\"address\":80,\"length\":2}}", b->name);
+           "\"params\":{\"channel\":\"%s\",\"address\":80,\"length\":2}}",
+           b->name);
   send(req);
   check(last_has("\"hex\":\"a5a5\""), "reads return the device's bytes");
 
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"i2c.read\","
-           "\"params\":{\"channel\":\"%s\",\"address\":81,\"length\":2}}", b->name);
+           "\"params\":{\"channel\":\"%s\",\"address\":81,\"length\":2}}",
+           b->name);
   send(req);
   check(last_has("-32004"), "an address that does not answer is an error, not empty data");
 
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"i2c.read\","
-           "\"params\":{\"channel\":\"%s\",\"address\":200,\"length\":2}}", b->name);
+           "\"params\":{\"channel\":\"%s\",\"address\":200,\"length\":2}}",
+           b->name);
   send(req);
   check(last_has("-32602"), "an address outside 7 bits is rejected");
 
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"i2c.write\","
-           "\"params\":{\"channel\":\"%s\",\"address\":80,\"hex\":\"0102\"}}", b->name);
+           "\"params\":{\"channel\":\"%s\",\"address\":80,\"hex\":\"0102\"}}",
+           b->name);
   send(req);
   check(mock.i2c_last_write_len == 2 && mock.i2c_last_write[1] == 0x02, "writes reach the bus");
 }
@@ -279,12 +290,13 @@ static void test_i2c(void) {
 static void test_spi(void) {
   if (fx_spi_count == 0) return;
   begin("spi");
-  const fx_spi_desc *s = &fx_spi[0];
+  const fx_spi_desc* s = &fx_spi[0];
   mock.spi_reply = 0x5A;
   char req[512];
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"spi.transfer\","
-           "\"params\":{\"channel\":\"%s\",\"hex\":\"0f0f\"}}", s->name);
+           "\"params\":{\"channel\":\"%s\",\"hex\":\"0f0f\"}}",
+           s->name);
   send(req);
   if (s->role == FX_ROLE_MONITOR) {
     check(last_has("-32005"), "a monitor bus refuses to drive the lines");
@@ -299,8 +311,8 @@ static void test_spi(void) {
 static void test_guard_interlock(void) {
   /* Find any bus with a guard, assert the guard, and confirm the bus opens up. */
   int8_t guard = -1;
-  const char *bus = NULL;
-  const char *method = NULL;
+  const char* bus = NULL;
+  const char* method = NULL;
   for (size_t i = 0; i < fx_i2c_count && guard < 0; i++)
     if (fx_i2c[i].guard >= 0) {
       guard = fx_i2c[i].guard;
@@ -319,18 +331,21 @@ static void test_guard_interlock(void) {
   char req[512];
   snprintf(req, sizeof(req),
            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"gpio.write\","
-           "\"params\":{\"channel\":\"%s\",\"assert\":true}}", fx_gpio[guard].name);
+           "\"params\":{\"channel\":\"%s\",\"assert\":true}}",
+           fx_gpio[guard].name);
   send(req);
   check(last_has("\"asserted\":true"), "the guard can be asserted");
 
   if (strcmp(method, "uart.write") == 0)
     snprintf(req, sizeof(req),
              "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"uart.write\","
-             "\"params\":{\"channel\":\"%s\",\"hex\":\"00\"}}", bus);
+             "\"params\":{\"channel\":\"%s\",\"hex\":\"00\"}}",
+             bus);
   else
     snprintf(req, sizeof(req),
              "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"i2c.scan\","
-             "\"params\":{\"channel\":\"%s\"}}", bus);
+             "\"params\":{\"channel\":\"%s\"}}",
+             bus);
   send(req);
   check(!last_has("-32003"), "and the guarded bus then accepts traffic");
 }
@@ -341,8 +356,9 @@ static void test_json_escaping(void) {
   check(last_has("-32601"), "an id containing a quote does not break parsing");
   mock.out_len = 0;
   mock.out[0] = '\0';
-  send("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"gpio.read\","
-       "\"params\":{\"channel\":\"a\\nb\"}}");
+  send(
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"gpio.read\","
+      "\"params\":{\"channel\":\"a\\nb\"}}");
   check(last_has("-32001"), "a control character in a name is handled, not injected");
   size_t newlines = 0;
   for (size_t i = 0; i < mock.out_len; i++)
@@ -353,7 +369,7 @@ static void test_json_escaping(void) {
 /* Config-derived expectations, written out by pinside from the fixture config. */
 static void test_generated_roster(void) {
   current = "generated roster";
-@@ROSTER_ASSERTIONS@@
+  /* PINSIDE__ROSTER_ASSERTIONS */
 }
 
 int main(void) {

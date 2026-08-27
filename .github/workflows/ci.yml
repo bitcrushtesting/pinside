@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+# Cancel an in-progress run when a newer commit is pushed to the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # clang-format comes from a toolchain rather than from pip, so the script
+      # asks for it rather than installing it. On the runner it is one apt away.
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+      # The script pins and installs ruff itself, from pyproject's dev extra, so
+      # CI and a developer machine cannot end up on different versions.
+      - name: Lint
+        run: scripts/lint.sh
+
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # One test compiles the firmware the generator emits and runs its own
+      # suite under ASan and UBSan. It skips itself without a compiler, so the
+      # runner having cc is what makes that test actually run.
+      - name: Run tests
+        run: scripts/test.sh --verbose
+
+  example:
+    name: End to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # Installing rather than running from the tree is the point: it is the
+      # only check that the console script works and that the firmware
+      # templates are packaged as data rather than left behind in the sdist.
+      - name: Install
+        run: python -m pip install .
+
+      - name: Check the example board
+        run: pinside check examples/demo-board.kicad_pcb --strict
+
+      - name: Every output format renders
+        run: |
+          for fmt in table csv json svg; do
+            pinside check examples/demo-board.kicad_pcb -f "$fmt" > "/tmp/out.$fmt"
+            test -s "/tmp/out.$fmt"
+          done
+          python -c "import json; json.load(open('/tmp/out.json'))"
+
+      - name: Drafting a config from the board still validates
+        run: |
+          pinside init examples/demo-board.kicad_pcb -o /tmp/draft.json
+          pinside generate /tmp/draft.json --dry-run
+
+      - name: Generate firmware and run its own tests
+        run: |
+          pinside generate examples/demo-fixture.json --out /tmp/demo-firmware
+          /tmp/demo-firmware/test/run.sh
+
+      - name: The generated contract is valid JSON and names the config hash
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          contract = json.loads(pathlib.Path("/tmp/demo-firmware/openrpc.json").read_text())
+          assert contract["openrpc"].startswith("1."), contract["openrpc"]
+          assert contract["x-pinside"]["config_hash"], "no config hash in the contract"
+          assert contract["methods"], "no methods in the contract"
+          print(len(contract["methods"]), "methods,",
+                len(contract["x-pinside"]["channels"]), "channels")
+          PY
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+      # A wheel that has lost the templates still imports and still fails at the
+      # moment someone tries to generate, which is the worst time to find out.
+      - name: The wheel carries the firmware templates
+        run: |
+          python - <<'PY'
+          import pathlib, zipfile
+          wheel = next(pathlib.Path("dist").glob("*.whl"))
+          names = zipfile.ZipFile(wheel).namelist()
+          templates = [n for n in names if "firmware/templates/" in n]
+          assert len(templates) >= 9, f"only {len(templates)} templates in {wheel.name}"
+          assert any(n.endswith("py.typed") for n in names), "py.typed missing"
+          print(wheel.name, "->", len(templates), "templates")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

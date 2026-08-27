@@ -20,7 +20,18 @@ pip install .
 No dependencies; Python 3.10+. It also runs straight from a checkout:
 
 ```bash
-PYTHONPATH=src python3 -m pinside board.kicad_pcb
+PYTHONPATH=src python3 -m pinside check board.kicad_pcb
+```
+
+## Try it
+
+[`examples/`](examples/) has a small board that passes every check, and the
+fixture config drafted from it:
+
+```bash
+pinside check examples/demo-board.kicad_pcb           # a board with nothing wrong with it
+pinside generate examples/demo-fixture.json --out /tmp/demo-firmware
+/tmp/demo-firmware/test/run.sh                        # host tests, no board needed
 ```
 
 ## Use
@@ -238,15 +249,38 @@ for finding in run(board):
 
 `Limits` carries the physical numbers; pass your own to `run(board, Limits(probe_pitch=1.9))`.
 
-## Tests
+## Development
 
 ```bash
-python -m unittest discover -s tests -v
+scripts/test.sh            # the test suite
+scripts/lint.sh            # ruff, plus clang-format on the firmware templates
+scripts/lint.sh --fix      # apply what can be applied
 ```
 
-The suite builds its own synthetic boards, so it depends on no real project and no KiCad install.
-One test goes further and compiles the generated firmware, then runs *its* tests — the only check
-that the C templates and the generated tables actually agree. It skips if there is no compiler.
+There is no setup step: `scripts/lint.sh` installs the ruff version pinned in `pyproject.toml`
+into `.venv-tools/`, so CI and your machine run the same one.
+
+The test suite builds its own synthetic boards, so it depends on no real project and no KiCad
+install. One test goes further and compiles the generated firmware, then runs *its* tests — the
+only check that the C templates and the generated tables actually agree. It skips if there is no
+compiler.
+
+```
+src/pinside/
+    sexpr.py        a tolerant reader for KiCad's S-expressions
+    geometry.py     outlines: arcs and rounded rects flattened, segments chained
+    board.py        what is read out of a .kicad_pcb
+    checks.py       everything that can be wrong with a board (PS...)
+    report.py       table, CSV, JSON, SVG
+    targets.py      what each microcontroller can do with each pin
+    config.py       the fixture config, and everything wrong with one (PF...)
+    scaffold.py     drafting a config from a board
+    cli.py          check | init | generate
+    firmware/       the emitter, and the C templates it emits
+```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rules that are not obvious from the code, and
+[CHANGELOG.md](CHANGELOG.md) records what changed.
 
 ## Why not the KiCad Python API
 

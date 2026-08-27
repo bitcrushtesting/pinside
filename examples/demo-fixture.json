@@ -1,0 +1,115 @@
+{
+  "name": "demo-fixture",
+  "description": "A worked example: one UART, one I2C bus, one SPI bus, two control lines and a rail monitor.",
+  "target": {
+    "mcu": "rp2350b",
+    "clock_hz": 150000000,
+    "usb": {
+      "product": "demo-fixture fixture"
+    }
+  },
+  "dut": {
+    "board": "demo-board.kicad_pcb",
+    "logic_voltage": 3.3,
+    "require_all_test_points": true
+  },
+  "uart": [
+    {
+      "name": "dut_uart",
+      "description": "DUT serial link",
+      "peripheral": 0,
+      "baud": 115200,
+      "pins": {
+        "rts": 3,
+        "cts": 2,
+        "tx": 0,
+        "rx": 1
+      },
+      "probes": {
+        "rts": "DUT_CTS",
+        "cts": "DUT_RTS",
+        "tx": "DUT_RXD",
+        "rx": "DUT_TXD"
+      },
+      "stream": true
+    }
+  ],
+  "i2c": [
+    {
+      "name": "ext_i2c",
+      "description": "EXT two-wire bus",
+      "peripheral": 0,
+      "hz": 400000,
+      "pins": {
+        "scl": 5,
+        "sda": 4
+      },
+      "probes": {
+        "scl": "EXT_I2C_SCL",
+        "sda": "EXT_I2C_SDA"
+      },
+      "pullups": false
+    }
+  ],
+  "spi": [
+    {
+      "name": "ext_spi",
+      "description": "EXT SPI bus",
+      "peripheral": 0,
+      "hz": 1000000,
+      "mode": 0,
+      "role": "master",
+      "pins": {
+        "sck": 6,
+        "cs": 17,
+        "rx": 16,
+        "tx": 7
+      },
+      "probes": {
+        "sck": "EXT_SPI_CLK",
+        "cs": "EXT_SPI_CS",
+        "rx": "EXT_SPI_MISO",
+        "tx": "EXT_SPI_MOSI"
+      },
+      "guard": "dut_reset"
+    }
+  ],
+  "gpio": [
+    {
+      "name": "dut_reset",
+      "description": "DUT_RESET",
+      "pin": 8,
+      "probe": "DUT_RESET",
+      "direction": "open_drain",
+      "active_low": true,
+      "initial": "released"
+    },
+    {
+      "name": "dut_boot",
+      "description": "DUT_BOOT",
+      "pin": 9,
+      "probe": "DUT_BOOT",
+      "direction": "open_drain",
+      "active_low": true,
+      "initial": "released"
+    },
+    {
+      "name": "pwr_flt",
+      "description": "PWR_FLT",
+      "pin": 10,
+      "probe": "PWR_FLT",
+      "direction": "input"
+    }
+  ],
+  "adc": [
+    {
+      "name": "ch_3_3v",
+      "description": "+3.3V rail, through a 2:1 divider",
+      "pin": 40,
+      "probe": "+3.3V",
+      "divider": 2.0,
+      "nominal_v": 3.3,
+      "tolerance_v": 0.165
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # The tag is the release; the version in pyproject is what people install.
+      # Disagreement between the two is how a release ends up unreproducible, so
+      # it fails here rather than shipping.
+      - name: The tag matches the packaged version
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          packaged=$(python -c "import tomllib,pathlib; \
+              print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "$tagged" != "$packaged" ]; then
+            echo "tag $GITHUB_REF_NAME does not match pyproject version $packaged" >&2
+            exit 1
+          fi
+          echo "releasing $packaged"
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The section for this version, not merely the first one: the first
+          # is [Unreleased], which is never what a release should quote.
+          version="${GITHUB_REF_NAME#v}"
+          notes=$(awk -v v="$version" '
+            /^## \[/ { if (found) exit; found = ($0 ~ "\\[" v "\\]"); next }
+            found' CHANGELOG.md)
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --notes "${notes:-See CHANGELOG.md.}"

@@ -1,0 +1,20 @@
+version: 2
+
+updates:
+  # The actions used by ci.yml and release.yml. Grouped so a routine bump of
+  # three actions is one pull request rather than three.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # pinside has no runtime dependencies. This watches the one pinned tool, ruff,
+  # in pyproject's dev extra -- a new ruff can introduce findings, so it should
+  # arrive as a pull request CI can fail rather than as a surprise later.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly

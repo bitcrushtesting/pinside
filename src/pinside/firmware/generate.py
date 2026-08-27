@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,14 +21,26 @@ from pathlib import Path
 from .. import __version__
 from ..board import Board
 from ..checks import ERROR, Finding
-from ..config import Bus, FixtureConfig, I2cBus, SpiBus, UartBus, validate
+from ..config import Bus, FixtureConfig, validate
 
 TEMPLATES = Path(__file__).parent / "templates"
+
+# Placeholders in the templates. Bare identifiers rather than a punctuation sigil, so that
+# clang-format can run over the templates without breaking them -- an earlier @@MARKER@@ spelling
+# came back from the formatter as "@ @MARKER @ @" and generated a file that would not compile.
+MARKER = re.compile(r"PINSIDE__[A-Z0-9_]+")
 
 PARITY = {"none": "FX_PARITY_NONE", "even": "FX_PARITY_EVEN", "odd": "FX_PARITY_ODD"}
 DIRECTION = {"input": "FX_DIR_INPUT", "output": "FX_DIR_OUTPUT", "open_drain": "FX_DIR_OPEN_DRAIN"}
 PULL = {"none": "FX_PULL_NONE", "up": "FX_PULL_UP", "down": "FX_PULL_DOWN"}
 ROLE = {"master": "FX_ROLE_MASTER", "monitor": "FX_ROLE_MONITOR"}
+
+# JSON-schema fragments for the generated contract. Payloads travel as hex because it is
+# trivial to read in a log, which matters more here than the density base64 would buy.
+SCHEMA_STR = {"type": "string"}
+SCHEMA_INT = {"type": "integer"}
+SCHEMA_BOOL = {"type": "boolean"}
+SCHEMA_HEX = {"type": "string", "pattern": "^([0-9a-fA-F]{2})*$"}
 
 # Copied verbatim; only the config tables and the test roster are generated.
 VERBATIM = {
@@ -67,17 +80,37 @@ def config_hash(cfg: FixtureConfig) -> str:
     description does not invalidate a fixture that is still correct.
     """
     payload = {
-        "name": cfg.name, "mcu": cfg.mcu, "clock_hz": cfg.clock_hz,
-        "gpio": [(g.name, g.pin, g.direction, g.pull, g.active_low, g.initial, g.probe)
-                 for g in cfg.gpio],
-        "adc": [(a.name, a.pin, a.adc, a.divider, a.nominal_v, a.tolerance_v, a.probe)
-                for a in cfg.adc],
-        "uart": [(u.name, u.peripheral, u.baud, u.data_bits, u.stop_bits, u.parity,
-                  sorted(u.pins.items()), u.guard, u.stream) for u in cfg.uart],
-        "i2c": [(b.name, b.peripheral, b.hz, b.pullups, sorted(b.pins.items()), b.guard)
-                for b in cfg.i2c],
-        "spi": [(s.name, s.peripheral, s.hz, s.mode, s.role, sorted(s.pins.items()), s.guard)
-                for s in cfg.spi],
+        "name": cfg.name,
+        "mcu": cfg.mcu,
+        "clock_hz": cfg.clock_hz,
+        "gpio": [
+            (g.name, g.pin, g.direction, g.pull, g.active_low, g.initial, g.probe) for g in cfg.gpio
+        ],
+        "adc": [
+            (a.name, a.pin, a.adc, a.divider, a.nominal_v, a.tolerance_v, a.probe) for a in cfg.adc
+        ],
+        "uart": [
+            (
+                u.name,
+                u.peripheral,
+                u.baud,
+                u.data_bits,
+                u.stop_bits,
+                u.parity,
+                sorted(u.pins.items()),
+                u.guard,
+                u.stream,
+            )
+            for u in cfg.uart
+        ],
+        "i2c": [
+            (b.name, b.peripheral, b.hz, b.pullups, sorted(b.pins.items()), b.guard)
+            for b in cfg.i2c
+        ],
+        "spi": [
+            (s.name, s.peripheral, s.hz, s.mode, s.role, sorted(s.pins.items()), s.guard)
+            for s in cfg.spi
+        ],
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(blob).hexdigest()[:12]
@@ -108,7 +141,8 @@ def _pin(bus: Bus, role: str) -> str:
 
 
 def _milli(value: float) -> int:
-    return int(round(value * 1000))
+    """Volts and divider ratios as integers, so the firmware needs no floating-point printf."""
+    return round(value * 1000)
 
 
 def _table(ctype: str, name: str, rows: list[str]) -> list[str]:
@@ -119,10 +153,18 @@ def _table(ctype: str, name: str, rows: list[str]) -> list[str]:
     having to special-case an absent table.
     """
     if not rows:
-        return ["const " + ctype + " " + name + "[1] = {{0}};  /* none configured */",
-                "const size_t " + name + "_count = 0;", ""]
-    return ["const " + ctype + " " + name + "[] = {", *rows, "};",
-            "const size_t " + name + "_count = " + str(len(rows)) + ";", ""]
+        return [
+            "const " + ctype + " " + name + "[1] = {{0}};  /* none configured */",
+            "const size_t " + name + "_count = 0;",
+            "",
+        ]
+    return [
+        "const " + ctype + " " + name + "[] = {",
+        *rows,
+        "};",
+        "const size_t " + name + "_count = " + str(len(rows)) + ";",
+        "",
+    ]
 
 
 def emit_config_c(cfg: FixtureConfig, digest: str, board_path: str) -> str:
@@ -148,41 +190,66 @@ def emit_config_c(cfg: FixtureConfig, digest: str, board_path: str) -> str:
         "",
     ]
 
-    lines += _table("fx_gpio_desc", "fx_gpio", [
-        f"    {{{c_string(g.name)}, {c_string(g.probe)}, {c_string(g.description)}, "
-        f"{g.pin}, {DIRECTION[g.direction]}, {PULL[g.pull]}, "
-        f"{'true' if g.active_low else 'false'}, "
-        f"{'true' if g.initial == 'asserted' else 'false'}}},"
-        for g in cfg.gpio])
+    lines += _table(
+        "fx_gpio_desc",
+        "fx_gpio",
+        [
+            f"    {{{c_string(g.name)}, {c_string(g.probe)}, {c_string(g.description)}, "
+            f"{g.pin}, {DIRECTION[g.direction]}, {PULL[g.pull]}, "
+            f"{'true' if g.active_low else 'false'}, "
+            f"{'true' if g.initial == 'asserted' else 'false'}}},"
+            for g in cfg.gpio
+        ],
+    )
 
-    lines += _table("fx_adc_desc", "fx_adc", [
-        f"    {{{c_string(a.name)}, {c_string(a.probe)}, {c_string(a.description)}, "
-        f"{a.pin}, {a.adc}, {_milli(a.divider)}, "
-        f"{_milli(a.nominal_v) if a.nominal_v is not None else -1}, "
-        f"{_milli(a.tolerance_v) if a.tolerance_v is not None else 0}}},"
-        for a in cfg.adc])
+    lines += _table(
+        "fx_adc_desc",
+        "fx_adc",
+        [
+            f"    {{{c_string(a.name)}, {c_string(a.probe)}, {c_string(a.description)}, "
+            f"{a.pin}, {a.adc}, {_milli(a.divider)}, "
+            f"{_milli(a.nominal_v) if a.nominal_v is not None else -1}, "
+            f"{_milli(a.tolerance_v) if a.tolerance_v is not None else 0}}},"
+            for a in cfg.adc
+        ],
+    )
 
-    lines += _table("fx_uart_desc", "fx_uart", [
-        f"    {{{c_string(u.name)}, {c_string(u.description)}, "
-        f"{c_string(_probe_summary(u))}, {u.peripheral}, {u.baud}u, "
-        f"{u.data_bits}, {u.stop_bits}, {PARITY[u.parity]}, "
-        f"{'true' if u.stream else 'false'}, {_guard_index(cfg, u)}, "
-        f"{_pin(u, 'tx')}, {_pin(u, 'rx')}, {_pin(u, 'cts')}, {_pin(u, 'rts')}}},"
-        for u in cfg.uart])
+    lines += _table(
+        "fx_uart_desc",
+        "fx_uart",
+        [
+            f"    {{{c_string(u.name)}, {c_string(u.description)}, "
+            f"{c_string(_probe_summary(u))}, {u.peripheral}, {u.baud}u, "
+            f"{u.data_bits}, {u.stop_bits}, {PARITY[u.parity]}, "
+            f"{'true' if u.stream else 'false'}, {_guard_index(cfg, u)}, "
+            f"{_pin(u, 'tx')}, {_pin(u, 'rx')}, {_pin(u, 'cts')}, {_pin(u, 'rts')}}},"
+            for u in cfg.uart
+        ],
+    )
 
-    lines += _table("fx_i2c_desc", "fx_i2c", [
-        f"    {{{c_string(b.name)}, {c_string(b.description)}, "
-        f"{c_string(_probe_summary(b))}, {b.peripheral}, {b.hz}u, "
-        f"{'true' if b.pullups else 'false'}, {_guard_index(cfg, b)}, "
-        f"{_pin(b, 'sda')}, {_pin(b, 'scl')}}},"
-        for b in cfg.i2c])
+    lines += _table(
+        "fx_i2c_desc",
+        "fx_i2c",
+        [
+            f"    {{{c_string(b.name)}, {c_string(b.description)}, "
+            f"{c_string(_probe_summary(b))}, {b.peripheral}, {b.hz}u, "
+            f"{'true' if b.pullups else 'false'}, {_guard_index(cfg, b)}, "
+            f"{_pin(b, 'sda')}, {_pin(b, 'scl')}}},"
+            for b in cfg.i2c
+        ],
+    )
 
-    lines += _table("fx_spi_desc", "fx_spi", [
-        f"    {{{c_string(s.name)}, {c_string(s.description)}, "
-        f"{c_string(_probe_summary(s))}, {s.peripheral}, {s.hz}u, {s.mode}, "
-        f"{ROLE[s.role]}, {_guard_index(cfg, s)}, "
-        f"{_pin(s, 'rx')}, {_pin(s, 'cs')}, {_pin(s, 'sck')}, {_pin(s, 'tx')}}},"
-        for s in cfg.spi])
+    lines += _table(
+        "fx_spi_desc",
+        "fx_spi",
+        [
+            f"    {{{c_string(s.name)}, {c_string(s.description)}, "
+            f"{c_string(_probe_summary(s))}, {s.peripheral}, {s.hz}u, {s.mode}, "
+            f"{ROLE[s.role]}, {_guard_index(cfg, s)}, "
+            f"{_pin(s, 'rx')}, {_pin(s, 'cs')}, {_pin(s, 'sck')}, {_pin(s, 'tx')}}},"
+            for s in cfg.spi
+        ],
+    )
 
     return "\n".join(lines) + "\n"
 
@@ -196,24 +263,28 @@ def emit_roster_assertions(cfg: FixtureConfig) -> str:
         f'"the config declares {len(cfg.adc)} adc channels");',
         f"  check(fx_uart_count == {len(cfg.uart)}, "
         f'"the config declares {len(cfg.uart)} uart buses");',
-        f"  check(fx_i2c_count == {len(cfg.i2c)}, "
-        f'"the config declares {len(cfg.i2c)} i2c buses");',
-        f"  check(fx_spi_count == {len(cfg.spi)}, "
-        f'"the config declares {len(cfg.spi)} spi buses");',
+        f'  check(fx_i2c_count == {len(cfg.i2c)}, "the config declares {len(cfg.i2c)} i2c buses");',
+        f'  check(fx_spi_count == {len(cfg.spi)}, "the config declares {len(cfg.spi)} spi buses");',
     ]
     for i, g in enumerate(cfg.gpio):
-        lines.append(f'  check(strcmp(fx_gpio[{i}].name, {c_string(g.name)}) == 0 && '
-                     f'fx_gpio[{i}].pin == {g.pin}, '
-                     f'"{g.name} is on GPIO{g.pin}");')
+        lines.append(
+            f"  check(strcmp(fx_gpio[{i}].name, {c_string(g.name)}) == 0 && "
+            f"fx_gpio[{i}].pin == {g.pin}, "
+            f'"{g.name} is on GPIO{g.pin}");'
+        )
     for i, a in enumerate(cfg.adc):
-        lines.append(f'  check(strcmp(fx_adc[{i}].name, {c_string(a.name)}) == 0 && '
-                     f'fx_adc[{i}].adc == {a.adc}, '
-                     f'"{a.name} reads ADC{a.adc}");')
+        lines.append(
+            f"  check(strcmp(fx_adc[{i}].name, {c_string(a.name)}) == 0 && "
+            f"fx_adc[{i}].adc == {a.adc}, "
+            f'"{a.name} reads ADC{a.adc}");'
+        )
     for kind, items in (("uart", cfg.uart), ("i2c", cfg.i2c), ("spi", cfg.spi)):
         for i, b in enumerate(items):
-            lines.append(f'  check(strcmp(fx_{kind}[{i}].name, {c_string(b.name)}) == 0 && '
-                         f'fx_{kind}[{i}].index == {b.peripheral}, '
-                         f'"{b.name} is {kind}{b.peripheral}");')
+            lines.append(
+                f"  check(strcmp(fx_{kind}[{i}].name, {c_string(b.name)}) == 0 && "
+                f"fx_{kind}[{i}].index == {b.peripheral}, "
+                f'"{b.name} is {kind}{b.peripheral}");'
+            )
     return "\n".join(lines)
 
 
@@ -224,80 +295,149 @@ def emit_openrpc(cfg: FixtureConfig, digest: str) -> dict:
     """The agent-facing contract, in the same OpenRPC shape the rest of the family uses."""
 
     def method(name, summary, params, result, description=""):
-        return {"name": name, "summary": summary, "description": description,
-                "params": params, "result": {"name": "result", "schema": result}}
+        return {
+            "name": name,
+            "summary": summary,
+            "description": description,
+            "params": params,
+            "result": {"name": "result", "schema": result},
+        }
 
     def param(name, schema, required=True, description=""):
         return {"name": name, "required": required, "description": description, "schema": schema}
 
-    STR = {"type": "string"}
-    INT = {"type": "integer"}
-    BOOL = {"type": "boolean"}
-    HEX = {"type": "string", "pattern": "^([0-9a-fA-F]{2})*$"}
-
-    channels = [{"name": ch.name, "kind": ch.kind, "probe": getattr(ch, "probe", "")}
-                for ch in cfg.channels]
+    channels = [
+        {"name": ch.name, "kind": ch.kind, "probe": getattr(ch, "probe", "")} for ch in cfg.channels
+    ]
 
     return {
         "openrpc": "1.2.6",
         "info": {
             "title": f"{cfg.name} fixture",
             "version": __version__,
-            "description":
-                f"{cfg.description or 'Bed-of-nails fixture'}\n\n"
-                f"JSON-RPC 2.0 over USB CDC, one request per line. The fixture also sends "
-                f"unsolicited notifications: fixture.ready once at start-up, and uart.data for "
-                f"every bus configured to stream.\n\n"
-                f"Config hash {digest}. Compare it against fixture.info before trusting a run.",
+            "description": f"{cfg.description or 'Bed-of-nails fixture'}\n\n"
+            f"JSON-RPC 2.0 over USB CDC, one request per line. The fixture also sends "
+            f"unsolicited notifications: fixture.ready once at start-up, and uart.data for "
+            f"every bus configured to stream.\n\n"
+            f"Config hash {digest}. Compare it against fixture.info before trusting a run.",
         },
-        "x-pinside": {"config_hash": digest, "mcu": cfg.mcu, "dut_board": cfg.dut_board,
-                      "channels": channels},
+        "x-pinside": {
+            "config_hash": digest,
+            "mcu": cfg.mcu,
+            "dut_board": cfg.dut_board,
+            "channels": channels,
+        },
         "methods": [
-            method("fixture.info", "Identify the fixture",
-                   [], {"type": "object"},
-                   "Returns the fixture name, firmware version, target, DUT board and the "
-                   "config hash the firmware was generated from."),
-            method("fixture.channels", "List every channel and the DUT signal it probes",
-                   [], {"type": "array", "items": {"type": "object"}}),
-            method("gpio.read", "Read one GPIO channel",
-                   [param("channel", STR)], {"type": "object"},
-                   "Reports both the electrical level and whether that means asserted, which "
-                   "differ on an active-low line."),
-            method("gpio.write", "Drive or release one GPIO channel",
-                   [param("channel", STR), param("assert", BOOL)], {"type": "object"},
-                   "An open-drain channel is released to high-Z rather than driven high, so the "
-                   "fixture never fights a pull-up on the DUT."),
-            method("gpio.snapshot", "Read every GPIO channel at once",
-                   [], {"type": "array", "items": {"type": "object"}}),
-            method("adc.read", "Read one analogue channel",
-                   [param("channel", STR)], {"type": "object"},
-                   "millivolts is at the DUT, with the fixture's divider ratio already applied."),
-            method("adc.snapshot", "Read every analogue channel at once",
-                   [], {"type": "array", "items": {"type": "object"}}),
-            method("uart.write", "Transmit on a UART channel",
-                   [param("channel", STR), param("hex", HEX)], {"type": "object"}),
-            method("uart.read", "Drain a UART channel's receive buffer",
-                   [param("channel", STR), param("max", INT, required=False)],
-                   {"type": "object"}),
-            method("uart.configure", "Change a UART channel's baud rate",
-                   [param("channel", STR), param("baud", INT)], {"type": "object"}),
-            method("i2c.scan", "Find the devices answering on an I2C channel",
-                   [param("channel", STR)], {"type": "object"},
-                   "Probes 0x08-0x77; the addresses either side are reserved."),
-            method("i2c.write", "Write to an I2C device",
-                   [param("channel", STR), param("address", INT), param("hex", HEX)],
-                   {"type": "object"}),
-            method("i2c.read", "Read from an I2C device",
-                   [param("channel", STR), param("address", INT), param("length", INT)],
-                   {"type": "object"}),
-            method("spi.transfer", "Clock bytes out of and into a SPI channel",
-                   [param("channel", STR), param("hex", HEX)], {"type": "object"}),
+            method(
+                "fixture.info",
+                "Identify the fixture",
+                [],
+                {"type": "object"},
+                "Returns the fixture name, firmware version, target, DUT board and the "
+                "config hash the firmware was generated from.",
+            ),
+            method(
+                "fixture.channels",
+                "List every channel and the DUT signal it probes",
+                [],
+                {"type": "array", "items": {"type": "object"}},
+            ),
+            method(
+                "gpio.read",
+                "Read one GPIO channel",
+                [param("channel", SCHEMA_STR)],
+                {"type": "object"},
+                "Reports both the electrical level and whether that means asserted, which "
+                "differ on an active-low line.",
+            ),
+            method(
+                "gpio.write",
+                "Drive or release one GPIO channel",
+                [param("channel", SCHEMA_STR), param("assert", SCHEMA_BOOL)],
+                {"type": "object"},
+                "An open-drain channel is released to high-Z rather than driven high, so the "
+                "fixture never fights a pull-up on the DUT.",
+            ),
+            method(
+                "gpio.snapshot",
+                "Read every GPIO channel at once",
+                [],
+                {"type": "array", "items": {"type": "object"}},
+            ),
+            method(
+                "adc.read",
+                "Read one analogue channel",
+                [param("channel", SCHEMA_STR)],
+                {"type": "object"},
+                "millivolts is at the DUT, with the fixture's divider ratio already applied.",
+            ),
+            method(
+                "adc.snapshot",
+                "Read every analogue channel at once",
+                [],
+                {"type": "array", "items": {"type": "object"}},
+            ),
+            method(
+                "uart.write",
+                "Transmit on a UART channel",
+                [param("channel", SCHEMA_STR), param("hex", SCHEMA_HEX)],
+                {"type": "object"},
+            ),
+            method(
+                "uart.read",
+                "Drain a UART channel's receive buffer",
+                [param("channel", SCHEMA_STR), param("max", SCHEMA_INT, required=False)],
+                {"type": "object"},
+            ),
+            method(
+                "uart.configure",
+                "Change a UART channel's baud rate",
+                [param("channel", SCHEMA_STR), param("baud", SCHEMA_INT)],
+                {"type": "object"},
+            ),
+            method(
+                "i2c.scan",
+                "Find the devices answering on an I2C channel",
+                [param("channel", SCHEMA_STR)],
+                {"type": "object"},
+                "Probes 0x08-0x77; the addresses either side are reserved.",
+            ),
+            method(
+                "i2c.write",
+                "Write to an I2C device",
+                [
+                    param("channel", SCHEMA_STR),
+                    param("address", SCHEMA_INT),
+                    param("hex", SCHEMA_HEX),
+                ],
+                {"type": "object"},
+            ),
+            method(
+                "i2c.read",
+                "Read from an I2C device",
+                [
+                    param("channel", SCHEMA_STR),
+                    param("address", SCHEMA_INT),
+                    param("length", SCHEMA_INT),
+                ],
+                {"type": "object"},
+            ),
+            method(
+                "spi.transfer",
+                "Clock bytes out of and into a SPI channel",
+                [param("channel", SCHEMA_STR), param("hex", SCHEMA_HEX)],
+                {"type": "object"},
+            ),
         ],
         "x-notifications": [
-            {"name": "fixture.ready",
-             "summary": "Sent once when the fixture has configured its pins"},
-            {"name": "uart.data",
-             "summary": "Bytes received on a streaming UART channel, pushed without being asked"},
+            {
+                "name": "fixture.ready",
+                "summary": "Sent once when the fixture has configured its pins",
+            },
+            {
+                "name": "uart.data",
+                "summary": "Bytes received on a streaming UART channel, pushed without being asked",
+            },
         ],
     }
 
@@ -310,8 +450,10 @@ def emit_cmakelists(cfg: FixtureConfig) -> str:
     if usb.get("product"):
         naming += f'pico_set_program_name(${{PROJECT_NAME}} "{usb["product"]}")\n'
     if usb.get("manufacturer"):
-        naming += (f'pico_set_program_description(${{PROJECT_NAME}} '
-                   f'"{usb["manufacturer"]} bed-of-nails fixture")\n')
+        naming += (
+            f"pico_set_program_description(${{PROJECT_NAME}} "
+            f'"{usb["manufacturer"]} bed-of-nails fixture")\n'
+        )
 
     return f"""# Generated by pinside from the {cfg.name} fixture config -- do not edit.
 #
@@ -334,7 +476,7 @@ endif()
 # The SDK ships its own importer; vendoring a copy only lets it go stale.
 include(${{PICO_SDK_PATH}}/external/pico_sdk_import.cmake)
 
-project({cfg.name.replace('-', '_')} C CXX ASM)
+project({cfg.name.replace("-", "_")} C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 
 pico_sdk_init()
@@ -395,19 +537,48 @@ mkdir -p "$out"
 """
 
 
+def _rows(rows: list[str], empty_columns: int) -> str:
+    """Table body, or a placeholder row of the right width when there is nothing to show."""
+    return "\n".join(rows) if rows else "| _none_ |" + " |" * (empty_columns - 1)
+
+
 def emit_readme(cfg: FixtureConfig, digest: str, board_path: str) -> str:
     def bus_rows(items, extra):
-        return "\n".join(
+        return [
             f"| `{b.name}` | {b.kind}{b.peripheral} | "
             f"{', '.join(f'{r}=GPIO{p}' for r, p in sorted(b.pins.items()))} | "
-            f"{_probe_summary(b) or '-'} | {extra(b)} |" for b in items)
+            f"{_probe_summary(b) or '-'} | {extra(b)} |"
+            for b in items
+        ]
+
+    def guarded(bus) -> str:
+        return f", guarded by `{bus.guard}`" if bus.guard else ""
+
+    gpio_rows = [
+        f"| `{g.name}` | GPIO{g.pin} | {g.direction}"
+        f"{', active low' if g.active_low else ''} | {g.probe or '-'} | {g.description or ''} |"
+        for g in cfg.gpio
+    ]
+    adc_rows = [
+        f"| `{a.name}` | GPIO{a.pin} | ADC{a.adc} | {a.divider}:1 | {a.probe or '-'} | "
+        f"{f'{a.nominal_v} V' if a.nominal_v is not None else '-'} |"
+        for a in cfg.adc
+    ]
+    bus_table = (
+        bus_rows(
+            cfg.uart, lambda b: f"{b.baud} baud{', streaming' if b.stream else ''}{guarded(b)}"
+        )
+        + bus_rows(cfg.i2c, lambda b: f"{b.hz} Hz{guarded(b)}")
+        + bus_rows(cfg.spi, lambda b: f"{b.hz} Hz, mode {b.mode}, {b.role}{guarded(b)}")
+    )
+    source_name = Path(cfg.source).name if cfg.source else "fixture.json"
 
     return f"""# {cfg.name} firmware
 
-{cfg.description or 'Bed-of-nails fixture firmware.'}
+{cfg.description or "Bed-of-nails fixture firmware."}
 
-Generated by pinside {__version__} from `{Path(cfg.source).name if cfg.source else 'the fixture config'}`,
-checked against `{board_path or '(no board given)'}`.
+Generated by pinside {__version__} from `{source_name}`, checked against
+`{board_path or "(no board given)"}`.
 
 **Config hash `{digest}`.** `fixture.info` reports it. If it does not match the config you are
 holding, the board in front of you was built from something else.
@@ -419,7 +590,7 @@ cmake -B build -DPICO_SDK_PATH=/path/to/pico-sdk
 cmake --build build
 ```
 
-Hold BOOTSEL, plug the fixture in, and copy `build/{cfg.name.replace('-', '_')}.uf2` onto it.
+Hold BOOTSEL, plug the fixture in, and copy `build/{cfg.name.replace("-", "_")}.uf2` onto it.
 
 ## Test, without hardware
 
@@ -451,23 +622,19 @@ channel configured to stream.
 
 | Channel | Pin | Direction | Probes | Notes |
 |---|---|---|---|---|
-{chr(10).join(f"| `{g.name}` | GPIO{g.pin} | {g.direction}{', active low' if g.active_low else ''} | {g.probe or '-'} | {g.description or ''} |" for g in cfg.gpio) or '| _none_ | | | | |'}
+{_rows(gpio_rows, 5)}
 
 ### Analogue
 
 | Channel | Pin | ADC | Divider | Probes | Expected |
 |---|---|---|---|---|---|
-{chr(10).join(f"| `{a.name}` | GPIO{a.pin} | ADC{a.adc} | {a.divider}:1 | {a.probe or '-'} | {f'{a.nominal_v} V' if a.nominal_v is not None else '-'} |" for a in cfg.adc) or '| _none_ | | | | | |'}
+{_rows(adc_rows, 6)}
 
 ### Buses
 
 | Channel | Peripheral | Pins | Probes | Settings |
 |---|---|---|---|---|
-{bus_rows(cfg.uart, lambda b: f"{b.baud} baud{', streaming' if b.stream else ''}"
-          + (f", guarded by `{b.guard}`" if b.guard else "")) or ''}
-{bus_rows(cfg.i2c, lambda b: f"{b.hz} Hz" + (f", guarded by `{b.guard}`" if b.guard else "")) or ''}
-{bus_rows(cfg.spi, lambda b: f"{b.hz} Hz, mode {b.mode}, {b.role}"
-          + (f", guarded by `{b.guard}`" if b.guard else "")) or ''}
+{_rows(bus_table, 5)}
 
 ## Guards
 
@@ -479,7 +646,7 @@ an Ethernet bus while the DUT's own controller is mid-transaction.
 ## Regenerating
 
 ```bash
-pinside generate {Path(cfg.source).name if cfg.source else 'fixture.json'} --out .
+pinside generate {source_name} --out .
 ```
 
 Everything here is overwritten. Change the config, not the firmware.
@@ -489,8 +656,9 @@ Everything here is overwritten. Change the config, not the firmware.
 # --------------------------------------------------------------------------- driver
 
 
-def generate(cfg: FixtureConfig, board: Board | None, out_dir: str | Path,
-             force: bool = False) -> Result:
+def generate(
+    cfg: FixtureConfig, board: Board | None, out_dir: str | Path, force: bool = False
+) -> Result:
     findings = validate(cfg, board)
     if any(f.severity == ERROR for f in findings):
         raise GenerationError(findings)
@@ -499,15 +667,38 @@ def generate(cfg: FixtureConfig, board: Board | None, out_dir: str | Path,
     if out.exists() and any(out.iterdir()) and not force:
         stamp = out / "src" / "fixture_config.c"
         if not stamp.exists():
-            raise GenerationError([Finding(
-                "PF003", ERROR, f"{out} is not empty and was not generated by pinside",
-                [str(out)], "pass --force to write into it anyway")])
+            raise GenerationError(
+                [
+                    Finding(
+                        "PF003",
+                        ERROR,
+                        f"{out} is not empty and was not generated by pinside",
+                        [str(out)],
+                        "pass --force to write into it anyway",
+                    )
+                ]
+            )
 
     digest = config_hash(cfg)
     board_path = cfg.dut_board
     written: list[Path] = []
 
     def write(relative: str, text: str, executable: bool = False) -> None:
+        # A placeholder that survives into the output is a silent defect: the file looks right
+        # and does not compile. Refuse it rather than write it.
+        leftover = MARKER.findall(text)
+        if leftover:
+            raise GenerationError(
+                [
+                    Finding(
+                        "PF004",
+                        ERROR,
+                        f"{relative} still contains template placeholders",
+                        sorted(set(leftover)),
+                        "the template gained a marker the generator does not substitute",
+                    )
+                ]
+            )
         path = out / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
@@ -515,17 +706,19 @@ def generate(cfg: FixtureConfig, board: Board | None, out_dir: str | Path,
             path.chmod(0o755)
         written.append(path)
 
+    # Placeholders are bare identifiers rather than a punctuation sigil, so clang-format can
+    # run over the templates without breaking them.
     substitutions = {
-        "@@CONFIG_SOURCE@@": Path(cfg.source).name if cfg.source else "the fixture config",
-        "@@DUT_BOARD@@": board_path or "(no board given)",
-        "@@PINSIDE_VERSION@@": __version__,
-        "@@GENERATED_AT@@": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "@@NAME_MAX@@": str(max(32, max((len(c.name) for c in cfg.channels), default=0) + 1)),
-        "@@GPIO_COUNT@@": str(len(cfg.gpio)),
-        "@@ADC_COUNT@@": str(len(cfg.adc)),
-        "@@UART_COUNT@@": str(len(cfg.uart)),
-        "@@I2C_COUNT@@": str(len(cfg.i2c)),
-        "@@SPI_COUNT@@": str(len(cfg.spi)),
+        "PINSIDE__CONFIG_SOURCE": Path(cfg.source).name if cfg.source else "the fixture config",
+        "PINSIDE__DUT_BOARD": board_path or "(no board given)",
+        "PINSIDE__VERSION": __version__,
+        "PINSIDE__GENERATED_AT": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "PINSIDE__NAME_MAX": str(max(32, max((len(c.name) for c in cfg.channels), default=0) + 1)),
+        "PINSIDE__GPIO_COUNT": str(len(cfg.gpio)),
+        "PINSIDE__ADC_COUNT": str(len(cfg.adc)),
+        "PINSIDE__UART_COUNT": str(len(cfg.uart)),
+        "PINSIDE__I2C_COUNT": str(len(cfg.i2c)),
+        "PINSIDE__SPI_COUNT": str(len(cfg.spi)),
     }
 
     header = (TEMPLATES / "fixture_config.h").read_text(encoding="utf-8")
@@ -537,7 +730,7 @@ def generate(cfg: FixtureConfig, board: Board | None, out_dir: str | Path,
         write(destination, (TEMPLATES / name).read_text(encoding="utf-8"))
 
     test = (TEMPLATES / "test_core.c").read_text(encoding="utf-8")
-    test = test.replace("@@ROSTER_ASSERTIONS@@", emit_roster_assertions(cfg))
+    test = test.replace("/* PINSIDE__ROSTER_ASSERTIONS */", emit_roster_assertions(cfg))
     write("test/test_core.c", test)
 
     write("src/fixture_config.c", emit_config_c(cfg, digest, board_path))

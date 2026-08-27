@@ -18,6 +18,14 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+# Everything the scripts under scripts/ need. They install it themselves into
+# .venv-tools/ when it is missing, so a fresh checkout needs no setup step.
+dev = ["ruff==0.16.5"]
+
+[project.urls]
+Repository = "https://github.com/bitcrushtesting/pinside"
+
 [project.scripts]
 pinside = "pinside.cli:main"
 
@@ -26,3 +34,51 @@ where = ["src"]
 
 [tool.setuptools.package-dir]
 "" = "src"
+
+[tool.setuptools.package-data]
+# The firmware templates are the product, not incidental files, and py.typed
+# tells a consumer the annotations are real.
+pinside = ["py.typed", "firmware/templates/*"]
+
+[tool.ruff]
+# 100 columns, matching .clang-format, so the Python and the C templates that
+# sit beside each other wrap at the same place.
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+extend-exclude = [".venv-tools"]
+
+[tool.ruff.lint]
+select = [
+    "F",    # pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # import sorting
+    "N",    # naming
+    "UP",   # constructs superseded by newer Python
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplifications
+    "PIE",  # misc lints
+    "RET",  # return-flow
+    "PTH",  # os.path where pathlib reads better
+    "RUF",
+]
+ignore = [
+    # A lambda assigned to a name is the clearest way to write a one-line sort
+    # key next to the sort it serves.
+    "E731",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The tests import their synthetic-board helpers after adjusting sys.path, which
+# has to happen before the import to work at all.
+"tests/*" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pinside"]
+
+[tool.ruff.format]
+# Single quotes are not worth a diff; keep ruff's default double quotes and let
+# it own the formatting decisions.
+docstring-code-format = true

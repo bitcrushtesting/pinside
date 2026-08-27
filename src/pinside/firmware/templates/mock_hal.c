@@ -13,14 +13,14 @@ void mock_reset(void) {
   for (int i = 0; i < MOCK_PINS; i++) mock.direction[i] = FX_DIR_INPUT;
 }
 
-void fx_hal_write(const char *data, size_t len) {
+void fx_hal_write(const char* data, size_t len) {
   if (mock.out_len + len >= MOCK_OUT_MAX) return;
   memcpy(mock.out + mock.out_len, data, len);
   mock.out_len += len;
   mock.out[mock.out_len] = '\0';
 }
 
-const char *mock_last_line(void) {
+const char* mock_last_line(void) {
   static char line[MOCK_OUT_MAX];
   if (mock.out_len == 0) return "";
   size_t end = mock.out_len;
@@ -33,7 +33,7 @@ const char *mock_last_line(void) {
   return line;
 }
 
-bool mock_out_contains(const char *needle) { return strstr(mock.out, needle) != NULL; }
+bool mock_out_contains(const char* needle) { return strstr(mock.out, needle) != NULL; }
 
 uint64_t fx_hal_millis(void) { return mock.millis; }
 
@@ -71,7 +71,7 @@ void fx_hal_uart_configure(uint8_t index, uint32_t baud, uint8_t data_bits, uint
   if (index < 2) mock.uart_baud[index] = baud;
 }
 
-size_t fx_hal_uart_write(uint8_t index, const uint8_t *data, size_t len) {
+size_t fx_hal_uart_write(uint8_t index, const uint8_t* data, size_t len) {
   if (index >= 2) return 0;
   size_t room = MOCK_FIFO - mock.uart_tx_len[index];
   if (len > room) len = room;
@@ -80,7 +80,7 @@ size_t fx_hal_uart_write(uint8_t index, const uint8_t *data, size_t len) {
   return len;
 }
 
-size_t fx_hal_uart_read(uint8_t index, uint8_t *data, size_t max) {
+size_t fx_hal_uart_read(uint8_t index, uint8_t* data, size_t max) {
   if (index >= 2) return 0;
   size_t n = mock.uart_rx_len[index];
   if (n > max) n = max;
@@ -90,7 +90,7 @@ size_t fx_hal_uart_read(uint8_t index, uint8_t *data, size_t max) {
   return n;
 }
 
-int fx_hal_i2c_write(uint8_t index, uint8_t address, const uint8_t *data, size_t len,
+int fx_hal_i2c_write(uint8_t index, uint8_t address, const uint8_t* data, size_t len,
                      bool hold_bus) {
   (void)hold_bus;
   if (index >= 2 || !mock.i2c_present[index][address]) return -1;
@@ -100,7 +100,7 @@ int fx_hal_i2c_write(uint8_t index, uint8_t address, const uint8_t *data, size_t
   return 0;
 }
 
-int fx_hal_i2c_read(uint8_t index, uint8_t address, uint8_t *data, size_t len) {
+int fx_hal_i2c_read(uint8_t index, uint8_t address, uint8_t* data, size_t len) {
   if (index >= 2 || !mock.i2c_present[index][address]) return -1;
   memset(data, mock.i2c_reply, len);
   return 0;
@@ -112,7 +112,7 @@ void fx_hal_spi_configure(uint8_t index, uint32_t hz, uint8_t mode) {
   (void)mode;
 }
 
-void fx_hal_spi_transfer(uint8_t index, const uint8_t *tx, uint8_t *rx, size_t len) {
+void fx_hal_spi_transfer(uint8_t index, const uint8_t* tx, uint8_t* rx, size_t len) {
   (void)index;
   size_t n = len > MOCK_FIFO ? MOCK_FIFO : len;
   memcpy(mock.spi_last_tx, tx, n);

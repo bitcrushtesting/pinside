@@ -23,16 +23,16 @@
 /* ------------------------------------------------------------------ JSON reading */
 
 typedef struct {
-  const char *p;
+  const char* p;
   size_t n;
 } fx_str;
 
-static const char *skip_ws(const char *p, const char *end) {
+static const char* skip_ws(const char* p, const char* end) {
   while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
   return p;
 }
 
-static const char *skip_string(const char *p, const char *end) {
+static const char* skip_string(const char* p, const char* end) {
   if (p >= end || *p != '"') return NULL;
   p++;
   while (p < end) {
@@ -47,7 +47,7 @@ static const char *skip_string(const char *p, const char *end) {
 }
 
 /* Advance past one complete JSON value, whatever its depth. */
-static const char *skip_value(const char *p, const char *end) {
+static const char* skip_value(const char* p, const char* end) {
   p = skip_ws(p, end);
   if (p >= end) return NULL;
   if (*p == '"') return skip_string(p, end);
@@ -70,14 +70,14 @@ static const char *skip_value(const char *p, const char *end) {
     }
     return NULL;
   }
-  while (p < end && *p != ',' && *p != '}' && *p != ']' &&
-         *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+  while (p < end && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\t' && *p != '\n' &&
+         *p != '\r')
     p++;
   return p;
 }
 
 /* Find key at the top level of the object starting at p. */
-static bool obj_get(const char *p, const char *end, const char *key, fx_str *out) {
+static bool obj_get(const char* p, const char* end, const char* key, fx_str* out) {
   p = skip_ws(p, end);
   if (p >= end || *p != '{') return false;
   p++;
@@ -85,15 +85,15 @@ static bool obj_get(const char *p, const char *end, const char *key, fx_str *out
   for (;;) {
     p = skip_ws(p, end);
     if (p >= end || *p == '}') return false;
-    const char *name = p + 1;
-    const char *after = skip_string(p, end);
+    const char* name = p + 1;
+    const char* after = skip_string(p, end);
     if (!after) return false;
     size_t namelen = (size_t)(after - name - 1);
     p = skip_ws(after, end);
     if (p >= end || *p != ':') return false;
     p = skip_ws(p + 1, end);
-    const char *value = p;
-    const char *value_end = skip_value(p, end);
+    const char* value = p;
+    const char* value_end = skip_value(p, end);
     if (!value_end) return false;
     if (namelen == keylen && memcmp(name, key, keylen) == 0) {
       out->p = value;
@@ -109,10 +109,10 @@ static bool obj_get(const char *p, const char *end, const char *key, fx_str *out
   }
 }
 
-static bool str_value(fx_str v, char *buf, size_t cap) {
+static bool str_value(fx_str v, char* buf, size_t cap) {
   if (v.n < 2 || v.p[0] != '"') return false;
-  const char *p = v.p + 1;
-  const char *end = v.p + v.n - 1;
+  const char* p = v.p + 1;
+  const char* end = v.p + v.n - 1;
   size_t o = 0;
   while (p < end && o + 1 < cap) {
     char c = *p++;
@@ -137,9 +137,9 @@ static bool str_value(fx_str v, char *buf, size_t cap) {
   return p >= end;
 }
 
-static bool int_value(fx_str v, long *out) {
-  const char *p = v.p;
-  const char *end = v.p + v.n;
+static bool int_value(fx_str v, long* out) {
+  const char* p = v.p;
+  const char* end = v.p + v.n;
   bool neg = false;
   if (p < end && (*p == '-' || *p == '+')) neg = (*p++ == '-');
   if (p >= end) return false;
@@ -154,7 +154,7 @@ static bool int_value(fx_str v, long *out) {
   return true;
 }
 
-static bool bool_value(fx_str v, bool *out) {
+static bool bool_value(fx_str v, bool* out) {
   if (v.n == 4 && memcmp(v.p, "true", 4) == 0) {
     *out = true;
     return true;
@@ -177,13 +177,13 @@ typedef struct {
   size_t len;
 } fx_out;
 
-static void out_drain(fx_out *o) {
+static void out_drain(fx_out* o) {
   if (o->len == 0) return;
   fx_hal_write(o->buf, o->len);
   o->len = 0;
 }
 
-static void out_raw(fx_out *o, const char *s, size_t n) {
+static void out_raw(fx_out* o, const char* s, size_t n) {
   while (n > 0) {
     size_t room = sizeof(o->buf) - o->len;
     if (room == 0) {
@@ -198,11 +198,11 @@ static void out_raw(fx_out *o, const char *s, size_t n) {
   }
 }
 
-static void out_lit(fx_out *o, const char *s) { out_raw(o, s, strlen(s)); }
+static void out_lit(fx_out* o, const char* s) { out_raw(o, s, strlen(s)); }
 
-static void out_char(fx_out *o, char c) { out_raw(o, &c, 1); }
+static void out_char(fx_out* o, char c) { out_raw(o, &c, 1); }
 
-static void out_escaped(fx_out *o, const char *s) {
+static void out_escaped(fx_out* o, const char* s) {
   out_char(o, '"');
   for (; *s; s++) {
     switch (*s) {
@@ -226,7 +226,7 @@ static void out_escaped(fx_out *o, const char *s) {
   out_char(o, '"');
 }
 
-static void out_long(fx_out *o, long v) {
+static void out_long(fx_out* o, long v) {
   char tmp[24];
   size_t i = sizeof(tmp);
   unsigned long mag = (v < 0) ? (unsigned long)(-(v + 1)) + 1UL : (unsigned long)v;
@@ -238,27 +238,27 @@ static void out_long(fx_out *o, long v) {
   out_raw(o, tmp + i, sizeof(tmp) - i);
 }
 
-static void out_key(fx_out *o, const char *key) {
+static void out_key(fx_out* o, const char* key) {
   out_escaped(o, key);
   out_char(o, ':');
 }
 
-static void out_kv_str(fx_out *o, const char *key, const char *value) {
+static void out_kv_str(fx_out* o, const char* key, const char* value) {
   out_key(o, key);
   out_escaped(o, value);
 }
 
-static void out_kv_long(fx_out *o, const char *key, long value) {
+static void out_kv_long(fx_out* o, const char* key, long value) {
   out_key(o, key);
   out_long(o, value);
 }
 
-static void out_kv_bool(fx_out *o, const char *key, bool value) {
+static void out_kv_bool(fx_out* o, const char* key, bool value) {
   out_key(o, key);
   out_lit(o, value ? "true" : "false");
 }
 
-static void out_flush(fx_out *o) {
+static void out_flush(fx_out* o) {
   out_char(o, '\n');
   out_drain(o);
 }
@@ -272,7 +272,7 @@ static int hex_digit(char c) {
   return -1;
 }
 
-static long hex_decode(const char *s, uint8_t *out, size_t cap) {
+static long hex_decode(const char* s, uint8_t* out, size_t cap) {
   size_t n = 0;
   while (*s) {
     int hi = hex_digit(*s++);
@@ -285,7 +285,7 @@ static long hex_decode(const char *s, uint8_t *out, size_t cap) {
   return (long)n;
 }
 
-static void out_hex(fx_out *o, const uint8_t *data, size_t len) {
+static void out_hex(fx_out* o, const uint8_t* data, size_t len) {
   static const char hex[] = "0123456789abcdef";
   out_char(o, '"');
   for (size_t i = 0; i < len; i++) {
@@ -297,31 +297,31 @@ static void out_hex(fx_out *o, const uint8_t *data, size_t len) {
 
 /* ------------------------------------------------------------------ channel lookup */
 
-static int find_gpio(const char *name) {
+static int find_gpio(const char* name) {
   for (size_t i = 0; i < fx_gpio_count; i++)
     if (strcmp(fx_gpio[i].name, name) == 0) return (int)i;
   return -1;
 }
 
-static int find_adc(const char *name) {
+static int find_adc(const char* name) {
   for (size_t i = 0; i < fx_adc_count; i++)
     if (strcmp(fx_adc[i].name, name) == 0) return (int)i;
   return -1;
 }
 
-static int find_uart(const char *name) {
+static int find_uart(const char* name) {
   for (size_t i = 0; i < fx_uart_count; i++)
     if (strcmp(fx_uart[i].name, name) == 0) return (int)i;
   return -1;
 }
 
-static int find_i2c(const char *name) {
+static int find_i2c(const char* name) {
   for (size_t i = 0; i < fx_i2c_count; i++)
     if (strcmp(fx_i2c[i].name, name) == 0) return (int)i;
   return -1;
 }
 
-static int find_spi(const char *name) {
+static int find_spi(const char* name) {
   for (size_t i = 0; i < fx_spi_count; i++)
     if (strcmp(fx_spi[i].name, name) == 0) return (int)i;
   return -1;
@@ -329,12 +329,12 @@ static int find_spi(const char *name) {
 
 /* ------------------------------------------------------------------ gpio semantics */
 
-static bool gpio_is_asserted(const fx_gpio_desc *g) {
+static bool gpio_is_asserted(const fx_gpio_desc* g) {
   bool level = fx_hal_gpio_get(g->pin);
   return g->active_low ? !level : level;
 }
 
-static void gpio_drive(const fx_gpio_desc *g, bool assert_it) {
+static void gpio_drive(const fx_gpio_desc* g, bool assert_it) {
   if (g->direction == FX_DIR_OPEN_DRAIN) {
     /* Only ever pull towards the asserted rail; releasing means going high-Z, which is what
      * keeps the fixture from fighting the DUT's own pull-up on a line like ESP_EN. */
@@ -353,9 +353,7 @@ static bool guard_satisfied(int8_t guard) {
   return gpio_is_asserted(&fx_gpio[guard]);
 }
 
-static const char *guard_name(int8_t guard) {
-  return guard < 0 ? "" : fx_gpio[guard].name;
-}
+static const char* guard_name(int8_t guard) { return guard < 0 ? "" : fx_gpio[guard].name; }
 
 /* ------------------------------------------------------------------ responses */
 
@@ -364,7 +362,7 @@ typedef struct {
   bool has_id;
 } fx_req;
 
-static void out_head(fx_out *o, const fx_req *req) {
+static void out_head(fx_out* o, const fx_req* req) {
   o->len = 0;
   out_lit(o, "{\"jsonrpc\":\"2.0\",\"id\":");
   if (req->has_id)
@@ -373,7 +371,7 @@ static void out_head(fx_out *o, const fx_req *req) {
     out_lit(o, "null");
 }
 
-static void reply_error(const fx_req *req, long code, const char *message, const char *data) {
+static void reply_error(const fx_req* req, long code, const char* message, const char* data) {
   fx_out o;
   out_head(&o, req);
   out_lit(&o, ",\"error\":{");
@@ -388,28 +386,28 @@ static void reply_error(const fx_req *req, long code, const char *message, const
   out_flush(&o);
 }
 
-static void reply_ok_empty(const fx_req *req) {
+static void reply_ok_empty(const fx_req* req) {
   fx_out o;
   out_head(&o, req);
   out_lit(&o, ",\"result\":{}}");
   out_flush(&o);
 }
 
-static void notify_begin(fx_out *o, const char *method) {
+static void notify_begin(fx_out* o, const char* method) {
   o->len = 0;
   out_lit(o, "{\"jsonrpc\":\"2.0\",\"method\":");
   out_escaped(o, method);
   out_lit(o, ",\"params\":{");
 }
 
-static void notify_end(fx_out *o) {
+static void notify_end(fx_out* o) {
   out_lit(o, "}}");
   out_flush(o);
 }
 
 /* ------------------------------------------------------------------ methods */
 
-static void emit_gpio_state(fx_out *o, const fx_gpio_desc *g) {
+static void emit_gpio_state(fx_out* o, const fx_gpio_desc* g) {
   out_lit(o, "{");
   out_kv_str(o, "channel", g->name);
   out_char(o, ',');
@@ -423,7 +421,7 @@ static void emit_gpio_state(fx_out *o, const fx_gpio_desc *g) {
   out_lit(o, "}");
 }
 
-static void emit_adc_state(fx_out *o, const fx_adc_desc *a) {
+static void emit_adc_state(fx_out* o, const fx_adc_desc* a) {
   uint16_t raw = fx_hal_adc_read(a->adc);
   uint32_t full = fx_hal_adc_full_scale();
   uint32_t at_pin_mv = full ? (uint32_t)raw * fx_hal_adc_reference_mv() / full : 0;
@@ -449,7 +447,7 @@ static void emit_adc_state(fx_out *o, const fx_adc_desc *a) {
   out_lit(o, "}");
 }
 
-static void method_info(const fx_req *req) {
+static void method_info(const fx_req* req) {
   fx_out o;
   out_head(&o, req);
   out_lit(&o, ",\"result\":{");
@@ -480,7 +478,7 @@ static void method_info(const fx_req *req) {
   out_flush(&o);
 }
 
-static void emit_bus_entry(fx_out *o, const char *kind, const char *name, const char *probe_list,
+static void emit_bus_entry(fx_out* o, const char* kind, const char* name, const char* probe_list,
                            int8_t guard, bool stream) {
   out_lit(o, "{");
   out_kv_str(o, "channel", name);
@@ -495,7 +493,7 @@ static void emit_bus_entry(fx_out *o, const char *kind, const char *name, const 
   out_lit(o, "}");
 }
 
-static void method_channels(const fx_req *req) {
+static void method_channels(const fx_req* req) {
   fx_out o;
   out_head(&o, req);
   out_lit(&o, ",\"result\":[");
@@ -553,19 +551,18 @@ static void method_channels(const fx_req *req) {
 }
 
 /* Pull a required string parameter. Replies with an error and returns false if absent. */
-static bool want_str(const fx_req *req, fx_str params, bool have_params, const char *key,
-                     char *buf, size_t cap) {
+static bool want_str(const fx_req* req, fx_str params, bool have_params, const char* key, char* buf,
+                     size_t cap) {
   fx_str v;
-  if (!have_params || !obj_get(params.p, params.p + params.n, key, &v) ||
-      !str_value(v, buf, cap)) {
+  if (!have_params || !obj_get(params.p, params.p + params.n, key, &v) || !str_value(v, buf, cap)) {
     reply_error(req, -32602, "invalid params", key);
     return false;
   }
   return true;
 }
 
-static bool want_long(const fx_req *req, fx_str params, bool have_params, const char *key,
-                      long *out) {
+static bool want_long(const fx_req* req, fx_str params, bool have_params, const char* key,
+                      long* out) {
   fx_str v;
   if (!have_params || !obj_get(params.p, params.p + params.n, key, &v) || !int_value(v, out)) {
     reply_error(req, -32602, "invalid params", key);
@@ -574,7 +571,7 @@ static bool want_long(const fx_req *req, fx_str params, bool have_params, const 
   return true;
 }
 
-static void method_gpio_read(const fx_req *req, fx_str params, bool have_params) {
+static void method_gpio_read(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   if (!want_str(req, params, have_params, "channel", name, sizeof(name))) return;
   int idx = find_gpio(name);
@@ -590,7 +587,7 @@ static void method_gpio_read(const fx_req *req, fx_str params, bool have_params)
   out_flush(&o);
 }
 
-static void method_gpio_write(const fx_req *req, fx_str params, bool have_params) {
+static void method_gpio_write(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   if (!want_str(req, params, have_params, "channel", name, sizeof(name))) return;
   int idx = find_gpio(name);
@@ -598,7 +595,7 @@ static void method_gpio_write(const fx_req *req, fx_str params, bool have_params
     reply_error(req, -32001, "no such gpio channel", name);
     return;
   }
-  const fx_gpio_desc *g = &fx_gpio[idx];
+  const fx_gpio_desc* g = &fx_gpio[idx];
   if (g->direction == FX_DIR_INPUT) {
     reply_error(req, -32002, "channel is an input", name);
     return;
@@ -619,7 +616,7 @@ static void method_gpio_write(const fx_req *req, fx_str params, bool have_params
   out_flush(&o);
 }
 
-static void method_gpio_snapshot(const fx_req *req) {
+static void method_gpio_snapshot(const fx_req* req) {
   fx_out o;
   out_head(&o, req);
   out_lit(&o, ",\"result\":[");
@@ -631,7 +628,7 @@ static void method_gpio_snapshot(const fx_req *req) {
   out_flush(&o);
 }
 
-static void method_adc_read(const fx_req *req, fx_str params, bool have_params) {
+static void method_adc_read(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   if (!want_str(req, params, have_params, "channel", name, sizeof(name))) return;
   int idx = find_adc(name);
@@ -647,7 +644,7 @@ static void method_adc_read(const fx_req *req, fx_str params, bool have_params) 
   out_flush(&o);
 }
 
-static void method_adc_snapshot(const fx_req *req) {
+static void method_adc_snapshot(const fx_req* req) {
   fx_out o;
   out_head(&o, req);
   out_lit(&o, ",\"result\":[");
@@ -659,7 +656,7 @@ static void method_adc_snapshot(const fx_req *req) {
   out_flush(&o);
 }
 
-static void method_uart_write(const fx_req *req, fx_str params, bool have_params) {
+static void method_uart_write(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   char hex[FX_PAYLOAD_MAX * 2 + 1];
   if (!want_str(req, params, have_params, "channel", name, sizeof(name))) return;
@@ -688,7 +685,7 @@ static void method_uart_write(const fx_req *req, fx_str params, bool have_params
   out_flush(&o);
 }
 
-static void method_uart_read(const fx_req *req, fx_str params, bool have_params) {
+static void method_uart_read(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   if (!want_str(req, params, have_params, "channel", name, sizeof(name))) return;
   int idx = find_uart(name);
@@ -718,7 +715,7 @@ static void method_uart_read(const fx_req *req, fx_str params, bool have_params)
   out_flush(&o);
 }
 
-static void method_uart_configure(const fx_req *req, fx_str params, bool have_params) {
+static void method_uart_configure(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   long baud = 0;
   if (!want_str(req, params, have_params, "channel", name, sizeof(name))) return;
@@ -732,12 +729,12 @@ static void method_uart_configure(const fx_req *req, fx_str params, bool have_pa
     reply_error(req, -32602, "invalid params", "baud must be positive");
     return;
   }
-  const fx_uart_desc *u = &fx_uart[idx];
+  const fx_uart_desc* u = &fx_uart[idx];
   fx_hal_uart_configure(u->index, (uint32_t)baud, u->data_bits, u->stop_bits, u->parity);
   reply_ok_empty(req);
 }
 
-static void method_i2c_scan(const fx_req *req, fx_str params, bool have_params) {
+static void method_i2c_scan(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   if (!want_str(req, params, have_params, "channel", name, sizeof(name))) return;
   int idx = find_i2c(name);
@@ -765,7 +762,7 @@ static void method_i2c_scan(const fx_req *req, fx_str params, bool have_params) 
   out_flush(&o);
 }
 
-static bool i2c_address_param(const fx_req *req, fx_str params, bool have_params, long *addr) {
+static bool i2c_address_param(const fx_req* req, fx_str params, bool have_params, long* addr) {
   if (!want_long(req, params, have_params, "address", addr)) return false;
   if (*addr < 0 || *addr > 0x7f) {
     reply_error(req, -32602, "invalid params", "address must be a 7-bit value");
@@ -774,7 +771,7 @@ static bool i2c_address_param(const fx_req *req, fx_str params, bool have_params
   return true;
 }
 
-static void method_i2c_write(const fx_req *req, fx_str params, bool have_params) {
+static void method_i2c_write(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   char hex[FX_PAYLOAD_MAX * 2 + 1];
   long addr = 0;
@@ -804,7 +801,7 @@ static void method_i2c_write(const fx_req *req, fx_str params, bool have_params)
   reply_ok_empty(req);
 }
 
-static void method_i2c_read(const fx_req *req, fx_str params, bool have_params) {
+static void method_i2c_read(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   long addr = 0;
   long length = 0;
@@ -838,7 +835,7 @@ static void method_i2c_read(const fx_req *req, fx_str params, bool have_params) 
   out_flush(&o);
 }
 
-static void method_spi_transfer(const fx_req *req, fx_str params, bool have_params) {
+static void method_spi_transfer(const fx_req* req, fx_str params, bool have_params) {
   char name[FX_NAME_MAX];
   char hex[FX_PAYLOAD_MAX * 2 + 1];
   if (!want_str(req, params, have_params, "channel", name, sizeof(name))) return;
@@ -875,9 +872,9 @@ static void method_spi_transfer(const fx_req *req, fx_str params, bool have_para
 
 /* ------------------------------------------------------------------ dispatch */
 
-static void dispatch(const char *line, size_t len) {
+static void dispatch(const char* line, size_t len) {
   fx_req req = {{NULL, 0}, false};
-  const char *end = line + len;
+  const char* end = line + len;
 
   fx_str id;
   if (obj_get(line, end, "id", &id)) {
@@ -887,8 +884,7 @@ static void dispatch(const char *line, size_t len) {
 
   fx_str method_v;
   char method[FX_NAME_MAX * 2];
-  if (!obj_get(line, end, "method", &method_v) ||
-      !str_value(method_v, method, sizeof(method))) {
+  if (!obj_get(line, end, "method", &method_v) || !str_value(method_v, method, sizeof(method))) {
     reply_error(&req, -32600, "invalid request", "no method");
     return;
   }
@@ -941,7 +937,7 @@ void fx_core_feed_byte(char c) {
   g_line_too_long = false;
 }
 
-void fx_core_feed(const char *data, size_t len) {
+void fx_core_feed(const char* data, size_t len) {
   for (size_t i = 0; i < len; i++) fx_core_feed_byte(data[i]);
 }
 
@@ -952,16 +948,16 @@ void fx_core_init(void) {
   g_line_too_long = false;
 
   for (size_t i = 0; i < fx_gpio_count; i++) {
-    const fx_gpio_desc *g = &fx_gpio[i];
+    const fx_gpio_desc* g = &fx_gpio[i];
     fx_hal_gpio_configure(g->pin, g->direction, g->pull);
     if (g->direction != FX_DIR_INPUT) gpio_drive(g, g->initial_asserted);
   }
   for (size_t i = 0; i < fx_uart_count; i++) {
-    const fx_uart_desc *u = &fx_uart[i];
+    const fx_uart_desc* u = &fx_uart[i];
     fx_hal_uart_configure(u->index, u->baud, u->data_bits, u->stop_bits, u->parity);
   }
   for (size_t i = 0; i < fx_spi_count; i++) {
-    const fx_spi_desc *s = &fx_spi[i];
+    const fx_spi_desc* s = &fx_spi[i];
     if (s->role == FX_ROLE_MASTER) fx_hal_spi_configure(s->index, s->hz, s->mode);
   }
 
@@ -979,7 +975,7 @@ void fx_core_poll(void) {
   /* Anything arriving on a streamed UART is pushed to the agent unasked, so a log line shows up
    * as soon as the DUT emits it rather than whenever someone remembers to poll. */
   for (size_t i = 0; i < fx_uart_count; i++) {
-    const fx_uart_desc *u = &fx_uart[i];
+    const fx_uart_desc* u = &fx_uart[i];
     if (!u->stream) continue;
     uint8_t payload[FX_PAYLOAD_MAX];
     size_t n = fx_hal_uart_read(u->index, payload, sizeof(payload));

@@ -19,17 +19,29 @@ from . import targets
 from .board import Board
 
 # Signal-name suffix -> the fixture pin role that must face it. Longest match wins.
-UART_FACING = OrderedDict([
-    ("TXD", "rx"), ("TX", "rx"),          # the DUT transmits; the fixture listens
-    ("RXD", "tx"), ("RX", "tx"),
-    ("RTS", "cts"), ("CTS", "rts"),       # flow control crosses over the same way
-])
+UART_FACING = OrderedDict(
+    [
+        ("TXD", "rx"),
+        ("TX", "rx"),  # the DUT transmits; the fixture listens
+        ("RXD", "tx"),
+        ("RX", "tx"),
+        ("RTS", "cts"),
+        ("CTS", "rts"),  # flow control crosses over the same way
+    ]
+)
 
-SPI_FACING = OrderedDict([
-    ("MISO", "rx"), ("MOSI", "tx"),
-    ("SCLK", "sck"), ("CLK", "sck"), ("SCK", "sck"),
-    ("CS", "cs"), ("SS", "cs"), ("NSS", "cs"),
-])
+SPI_FACING = OrderedDict(
+    [
+        ("MISO", "rx"),
+        ("MOSI", "tx"),
+        ("SCLK", "sck"),
+        ("CLK", "sck"),
+        ("SCK", "sck"),
+        ("CS", "cs"),
+        ("SS", "cs"),
+        ("NSS", "cs"),
+    ]
+)
 
 I2C_FACING = OrderedDict([("SDA", "sda"), ("SCL", "scl")])
 
@@ -107,7 +119,11 @@ def scaffold(board: Board, name: str, mcu: str = "rp2350b", board_path: str = ""
             "logic_voltage": 3.3,
             "require_all_test_points": True,
         },
-        "uart": [], "i2c": [], "spi": [], "gpio": [], "adc": [],
+        "uart": [],
+        "i2c": [],
+        "spi": [],
+        "gpio": [],
+        "adc": [],
     }
 
     claimed: set[str] = set()
@@ -133,15 +149,17 @@ def scaffold(board: Board, name: str, mcu: str = "rp2350b", board_path: str = ""
         if not pins:
             continue
         prefix = _bus_prefix(signals) or "dut"
-        config["uart"].append({
-            "name": f"{prefix}_uart",
-            "description": f"{prefix.upper()} serial link",
-            "peripheral": uart_instance,
-            "baud": 115200,
-            "pins": pins,
-            "probes": probes,
-            "stream": True,
-        })
+        config["uart"].append(
+            {
+                "name": f"{prefix}_uart",
+                "description": f"{prefix.upper()} serial link",
+                "peripheral": uart_instance,
+                "baud": 115200,
+                "pins": pins,
+                "probes": probes,
+                "stream": True,
+            }
+        )
         claim([s for s in signals if _facing(s, UART_FACING)])
         uart_instance = (uart_instance + 1) % target.uart_count
 
@@ -163,15 +181,17 @@ def scaffold(board: Board, name: str, mcu: str = "rp2350b", board_path: str = ""
         if len(pins) < 2:
             continue
         prefix = _bus_prefix(signals) or "dut"
-        config["i2c"].append({
-            "name": f"{prefix}_i2c",
-            "description": f"{prefix.upper()} two-wire bus",
-            "peripheral": i2c_instance,
-            "hz": 400000,
-            "pins": pins,
-            "probes": probes,
-            "pullups": False,
-        })
+        config["i2c"].append(
+            {
+                "name": f"{prefix}_i2c",
+                "description": f"{prefix.upper()} two-wire bus",
+                "peripheral": i2c_instance,
+                "hz": 400000,
+                "pins": pins,
+                "probes": probes,
+                "pullups": False,
+            }
+        )
         claim([s for s in signals if _facing(s, I2C_FACING)])
         i2c_instance = (i2c_instance + 1) % target.i2c_count
 
@@ -196,16 +216,18 @@ def scaffold(board: Board, name: str, mcu: str = "rp2350b", board_path: str = ""
         if "sck" not in pins:
             continue
         prefix = _bus_prefix(signals) or "dut"
-        config["spi"].append({
-            "name": f"{prefix}_spi",
-            "description": f"{prefix.upper()} SPI bus",
-            "peripheral": spi_instance,
-            "hz": 1000000,
-            "mode": 0,
-            "role": "master",
-            "pins": pins,
-            "probes": probes,
-        })
+        config["spi"].append(
+            {
+                "name": f"{prefix}_spi",
+                "description": f"{prefix.upper()} SPI bus",
+                "peripheral": spi_instance,
+                "hz": 1000000,
+                "mode": 0,
+                "role": "master",
+                "pins": pins,
+                "probes": probes,
+            }
+        )
         claim([s for s, r in roles.items() if r and r in probes and probes[r] == s])
         spi_instance = (spi_instance + 1) % target.spi_count
 
@@ -223,20 +245,22 @@ def scaffold(board: Board, name: str, mcu: str = "rp2350b", board_path: str = ""
             got = alloc.take_adc()
             if got is None:
                 continue
-            pin, channel = got
+            pin, _adc_channel = got
             volts = 3.3
             match = re.search(r"(\d+)[.,v](\d+)", signal, re.I)
             if match:
                 volts = float(f"{match.group(1)}.{match.group(2)}")
-            config["adc"].append({
-                "name": identifier,
-                "description": f"{signal} rail, through a 2:1 divider",
-                "pin": pin,
-                "probe": signal,
-                "divider": 2.0,
-                "nominal_v": volts,
-                "tolerance_v": round(volts * 0.05, 3),
-            })
+            config["adc"].append(
+                {
+                    "name": identifier,
+                    "description": f"{signal} rail, through a 2:1 divider",
+                    "pin": pin,
+                    "probe": signal,
+                    "divider": 2.0,
+                    "nominal_v": volts,
+                    "tolerance_v": round(volts * 0.05, 3),
+                }
+            )
             continue
 
         pin = alloc.take_plain()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass, field
 
@@ -45,6 +44,7 @@ def classify(signal: str) -> str:
             return name
     return "control"
 
+
 _EDGE_TAGS = ("gr_line", "gr_rect", "gr_arc", "gr_circle", "gr_poly", "gr_curve")
 
 
@@ -57,7 +57,7 @@ class Pad:
     drill: float | None
     layers: list[str]
     net: str
-    x: float          # absolute, footprint rotation applied
+    x: float  # absolute, footprint rotation applied
     y: float
 
     @property
@@ -104,7 +104,7 @@ class TestPoint:
     side: str
     pad: Pad | None
 
-    fx: float = 0.0   # position in the fixture frame, filled in by transform()
+    fx: float = 0.0  # position in the fixture frame, filled in by transform()
     fy: float = 0.0
 
     @property
@@ -141,7 +141,7 @@ class Board:
     outline: g.Outline
     test_points: list[TestPoint]
     mounting_holes: list[MountingHole]
-    obstacles: list[Footprint]      # every other placed footprint, for collision checks
+    obstacles: list[Footprint]  # every other placed footprint, for collision checks
     frame: dict = field(default_factory=dict)
 
 
@@ -194,7 +194,9 @@ def _read_footprint(node) -> Footprint:
         ref=_property(node, "Reference") or "?",
         value=_property(node, "Value"),
         library=node[1] if len(node) > 1 and isinstance(node[1], str) else "",
-        x=fx, y=fy, rotation=rot,
+        x=fx,
+        y=fy,
+        rotation=rot,
         side="bottom" if atom(child(node, "layer"), 1).startswith("B.") else "top",
         pads=[_read_pad(p, fx, fy, rot) for p in find_all(node, "pad")],
     )
@@ -235,8 +237,11 @@ def read_outline(tree) -> g.Outline:
             center = floats(child(node, "center"))
             radius = floats(child(node, "radius"))
             pts_node = child(node, "pts")
-            poly = [tuple(floats(p)[:2]) for p in (pts_node or [])
-                    if isinstance(p, list) and p and p[0] == "xy"]
+            poly = [
+                tuple(floats(p)[:2])
+                for p in (pts_node or [])
+                if isinstance(p, list) and p and p[0] == "xy"
+            ]
 
             shape = {"kind": kind}
             points: list[g.Point] = []
@@ -280,25 +285,48 @@ def read_board(path: str) -> Board:
         if is_test_point(fp):
             pad = fp.pads[0] if fp.pads else None
             net = pad.net if pad else ""
-            test_points.append(TestPoint(
-                ref=fp.ref, value=fp.value, signal=signal_name(net, fp.value), net=net,
-                x=pad.x if pad else fp.x, y=pad.y if pad else fp.y, side=fp.side, pad=pad))
+            test_points.append(
+                TestPoint(
+                    ref=fp.ref,
+                    value=fp.value,
+                    signal=signal_name(net, fp.value),
+                    net=net,
+                    x=pad.x if pad else fp.x,
+                    y=pad.y if pad else fp.y,
+                    side=fp.side,
+                    pad=pad,
+                )
+            )
         elif is_mounting_hole(fp):
             drills = [p.drill for p in fp.pads if p.drill]
-            holes.append(MountingHole(
-                ref=fp.ref, x=fp.x, y=fp.y,
-                drill=max(drills) if drills else None,
-                pad_diameter=max((p.max_dimension for p in fp.pads), default=None),
-                plated=bool(drills),
-                net=next((p.net for p in fp.pads if p.net), "")))
+            holes.append(
+                MountingHole(
+                    ref=fp.ref,
+                    x=fp.x,
+                    y=fp.y,
+                    drill=max(drills) if drills else None,
+                    pad_diameter=max((p.max_dimension for p in fp.pads), default=None),
+                    plated=bool(drills),
+                    net=next((p.net for p in fp.pads if p.net), ""),
+                )
+            )
         else:
             obstacles.append(fp)
 
-    key = lambda ref: (re.sub(r"\d+$", "", ref), int(m.group()) if (m := re.search(r"\d+$", ref)) else 0)
-    test_points.sort(key=lambda t: key(t.ref))
-    holes.sort(key=lambda h: key(h.ref))
-    return Board(source=path, outline=outline, test_points=test_points,
-                 mounting_holes=holes, obstacles=obstacles)
+    def order(ref: str) -> tuple[str, int]:
+        """TP9 before TP10: sort on the prefix, then the trailing number as a number."""
+        digits = re.search(r"\d+$", ref)
+        return re.sub(r"\d+$", "", ref), int(digits.group()) if digits else 0
+
+    test_points.sort(key=lambda t: order(t.ref))
+    holes.sort(key=lambda h: order(h.ref))
+    return Board(
+        source=path,
+        outline=outline,
+        test_points=test_points,
+        mounting_holes=holes,
+        obstacles=obstacles,
+    )
 
 
 def transform(board: Board, origin: str = "outline", mirror: str = "none") -> Board:
@@ -325,6 +353,10 @@ def transform(board: Board, origin: str = "outline", mirror: str = "none") -> Bo
             y = height - y
         item.fx, item.fy = round(x, 4), round(y, 4)
 
-    board.frame = {"origin": resolved, "requested_origin": origin,
-                   "mirror": mirror if box else "none", "offset": [ox, oy]}
+    board.frame = {
+        "origin": resolved,
+        "requested_origin": origin,
+        "mirror": mirror if box else "none",
+        "offset": [ox, oy],
+    }
     return board

@@ -7,32 +7,26 @@ that the templates and the generated tables actually agree, so it is worth the s
 from __future__ import annotations
 
 import json
-import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(0, os.path.dirname(__file__))
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT / "src"))
+sys.path.insert(0, str(_ROOT / "tests"))
 
-import boards  # noqa: E402
-
-from pinside import read_board, transform  # noqa: E402
-from pinside.checks import ERROR  # noqa: E402
-from pinside.config import ConfigError, from_dict, load, validate  # noqa: E402
-from pinside.firmware import GenerationError, config_hash, generate  # noqa: E402
-from pinside.scaffold import scaffold  # noqa: E402
-from pinside.targets import get as target  # noqa: E402
-
-
-def write(text: str, suffix: str = ".kicad_pcb") -> str:
-    handle = tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8")
-    handle.write(text)
-    handle.close()
-    return handle.name
+import boards
+from boards import write
+from pinside import read_board, transform
+from pinside.checks import ERROR
+from pinside.config import ConfigError, from_dict, load, validate
+from pinside.firmware import GenerationError, config_hash, generate
+from pinside.scaffold import scaffold
+from pinside.targets import get as target
 
 
 def codes(cfg, board=None) -> set[str]:
@@ -60,8 +54,20 @@ class TestTargets(unittest.TestCase):
         self.assertEqual(self.t.uart_of(3), (0, "rts"))
 
     def test_uart_instance_alternates_in_pairs_of_groups(self):
-        for gpio, instance in [(0, 0), (4, 1), (8, 1), (12, 0), (16, 0), (20, 1),
-                               (24, 1), (28, 0), (32, 0), (36, 1), (40, 1), (44, 0)]:
+        for gpio, instance in [
+            (0, 0),
+            (4, 1),
+            (8, 1),
+            (12, 0),
+            (16, 0),
+            (20, 1),
+            (24, 1),
+            (28, 0),
+            (32, 0),
+            (36, 1),
+            (40, 1),
+            (44, 0),
+        ]:
             self.assertEqual(self.t.uart_of(gpio)[0], instance, f"GPIO{gpio}")
 
     def test_spi_instance_alternates_every_eight_pins(self):
@@ -113,9 +119,18 @@ class TestConfigLoading(unittest.TestCase):
         self.assertIn("clock", str(caught.exception))
 
     def test_spi_pin_names_accept_schematic_spelling(self):
-        cfg = from_dict({"name": "x", "spi": [
-            {"name": "b", "pins": {"miso": 16, "mosi": 19, "sclk": 18, "cs": 17},
-             "probes": {"miso": "A", "mosi": "B", "sclk": "C", "cs": "D"}}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "spi": [
+                    {
+                        "name": "b",
+                        "pins": {"miso": 16, "mosi": 19, "sclk": 18, "cs": 17},
+                        "probes": {"miso": "A", "mosi": "B", "sclk": "C", "cs": "D"},
+                    }
+                ],
+            }
+        )
         self.assertEqual(cfg.spi[0].pins, {"rx": 16, "tx": 19, "sck": 18, "cs": 17})
         self.assertEqual(cfg.spi[0].probes["rx"], "A")
 
@@ -125,43 +140,84 @@ class TestConfigValidation(unittest.TestCase):
         self.assertEqual(codes(from_dict(MINIMAL)), set())
 
     def test_swapped_i2c_lines_are_caught_with_the_pins_that_would_work(self):
-        cfg = from_dict({"name": "x", "dut": {"require_all_test_points": False},
-                         "i2c": [{"name": "b", "peripheral": 0, "pins": {"sda": 9, "scl": 8}}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "dut": {"require_all_test_points": False},
+                "i2c": [{"name": "b", "peripheral": 0, "pins": {"sda": 9, "scl": 8}}],
+            }
+        )
         findings = validate(cfg)
         self.assertIn("PF021", {f.code for f in findings})
         self.assertIn("GPIO8", next(f for f in findings if f.code == "PF021").detail)
 
     def test_a_pin_cannot_serve_two_channels(self):
-        cfg = from_dict({"name": "x", "dut": {"require_all_test_points": False},
-                         "gpio": [{"name": "a", "pin": 5}, {"name": "b", "pin": 5}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "dut": {"require_all_test_points": False},
+                "gpio": [{"name": "a", "pin": 5}, {"name": "b", "pin": 5}],
+            }
+        )
         self.assertIn("PF023", codes(cfg))
 
     def test_adc_on_a_pin_without_a_converter(self):
-        cfg = from_dict({"name": "x", "dut": {"require_all_test_points": False},
-                         "adc": [{"name": "rail", "pin": 12}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "dut": {"require_all_test_points": False},
+                "adc": [{"name": "rail", "pin": 12}],
+            }
+        )
         self.assertIn("PF022", codes(cfg))
 
     def test_pin_beyond_the_package(self):
-        cfg = from_dict({"name": "x", "target": {"mcu": "rp2350a"},
-                         "dut": {"require_all_test_points": False},
-                         "gpio": [{"name": "a", "pin": 40}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "target": {"mcu": "rp2350a"},
+                "dut": {"require_all_test_points": False},
+                "gpio": [{"name": "a", "pin": 40}],
+            }
+        )
         self.assertIn("PF020", codes(cfg))
 
     def test_guard_must_name_a_declared_channel(self):
-        cfg = from_dict({"name": "x", "dut": {"require_all_test_points": False},
-                         "spi": [{"name": "b", "peripheral": 0, "guard": "nothing",
-                                  "pins": {"rx": 16, "cs": 17, "sck": 18, "tx": 19}}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "dut": {"require_all_test_points": False},
+                "spi": [
+                    {
+                        "name": "b",
+                        "peripheral": 0,
+                        "guard": "nothing",
+                        "pins": {"rx": 16, "cs": 17, "sck": 18, "tx": 19},
+                    }
+                ],
+            }
+        )
         self.assertIn("PF031", codes(cfg))
 
     def test_duplicate_channel_names(self):
-        cfg = from_dict({"name": "x", "dut": {"require_all_test_points": False},
-                         "gpio": [{"name": "a", "pin": 5}],
-                         "adc": [{"name": "a", "pin": 40}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "dut": {"require_all_test_points": False},
+                "gpio": [{"name": "a", "pin": 5}],
+                "adc": [{"name": "a", "pin": 40}],
+            }
+        )
         self.assertIn("PF011", codes(cfg))
 
     def test_a_name_c_cannot_use(self):
-        cfg = from_dict({"name": "x", "dut": {"require_all_test_points": False},
-                         "gpio": [{"name": "3-phase", "pin": 5}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "dut": {"require_all_test_points": False},
+                "gpio": [{"name": "3-phase", "pin": 5}],
+            }
+        )
         self.assertIn("PF010", codes(cfg))
 
     def test_unknown_mcu_stops_everything_else(self):
@@ -170,9 +226,15 @@ class TestConfigValidation(unittest.TestCase):
 
     def test_a_divider_that_would_overrange_the_adc(self):
         board = transform(read_board(write(boards.healthy())))
-        cfg = from_dict({"name": "x", "dut": {"require_all_test_points": False},
-                         "adc": [{"name": "rail", "pin": 40, "probe": "SCL",
-                                  "divider": 0.5, "nominal_v": 3.3}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "dut": {"require_all_test_points": False},
+                "adc": [
+                    {"name": "rail", "pin": 40, "probe": "SCL", "divider": 0.5, "nominal_v": 3.3}
+                ],
+            }
+        )
         self.assertIn("PF042", codes(cfg, board))
 
 
@@ -181,8 +243,13 @@ class TestConfigAgainstBoard(unittest.TestCase):
         self.board = transform(read_board(write(boards.healthy())))
 
     def test_a_probe_the_board_does_not_have(self):
-        cfg = from_dict({"name": "x", "dut": {"require_all_test_points": False},
-                         "gpio": [{"name": "a", "pin": 5, "probe": "NOT_ON_THE_BOARD"}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "dut": {"require_all_test_points": False},
+                "gpio": [{"name": "a", "pin": 5, "probe": "NOT_ON_THE_BOARD"}],
+            }
+        )
         self.assertIn("PF040", codes(cfg, self.board))
 
     def test_a_test_point_the_config_forgot(self):
@@ -193,8 +260,13 @@ class TestConfigAgainstBoard(unittest.TestCase):
         self.assertIn("SDA", missing.refs)
 
     def test_a_partial_fixture_can_be_declared_deliberate(self):
-        cfg = from_dict({"name": "x", "dut": {"require_all_test_points": False},
-                         "gpio": [{"name": "a", "pin": 5, "probe": "SCL"}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "dut": {"require_all_test_points": False},
+                "gpio": [{"name": "a", "pin": 5, "probe": "SCL"}],
+            }
+        )
         findings = validate(cfg, self.board)
         self.assertNotIn(ERROR, {f.severity for f in findings})
 
@@ -250,16 +322,30 @@ class TestGeneration(unittest.TestCase):
 
     def test_it_writes_a_whole_project(self):
         result = generate(self.cfg, self.board, self.out)
-        for expected in ["CMakeLists.txt", "openrpc.json", "README.md",
-                         "src/fixture_config.c", "src/fixture_core.c", "src/main.c",
-                         "include/fixture_config.h", "test/test_core.c", "test/run.sh"]:
+        for expected in [
+            "CMakeLists.txt",
+            "openrpc.json",
+            "README.md",
+            "src/fixture_config.c",
+            "src/fixture_core.c",
+            "src/main.c",
+            "include/fixture_config.h",
+            "test/test_core.c",
+            "test/run.sh",
+        ]:
             self.assertTrue((self.out / expected).exists(), expected)
-        self.assertTrue(os.access(self.out / "test" / "run.sh", os.X_OK))
+        mode = (self.out / "test" / "run.sh").stat().st_mode
+        self.assertTrue(mode & stat.S_IXUSR, "test/run.sh must be executable")
         self.assertEqual(len(result.files), len(set(result.files)))
 
     def test_an_invalid_config_writes_nothing(self):
-        bad = from_dict({"name": "bad", "dut": {"require_all_test_points": False},
-                         "gpio": [{"name": "a", "pin": 200}]})
+        bad = from_dict(
+            {
+                "name": "bad",
+                "dut": {"require_all_test_points": False},
+                "gpio": [{"name": "a", "pin": 200}],
+            }
+        )
         with self.assertRaises(GenerationError):
             generate(bad, None, self.out)
         self.assertEqual(list(self.out.iterdir()), [])
@@ -292,17 +378,35 @@ class TestGeneration(unittest.TestCase):
         self.assertEqual(listed, {c.name for c in self.cfg.channels})
 
     def test_a_config_with_no_buses_still_generates(self):
-        bare = from_dict({"name": "bare", "dut": {"require_all_test_points": False},
-                          "gpio": [{"name": "only", "pin": 5}]})
+        bare = from_dict(
+            {
+                "name": "bare",
+                "dut": {"require_all_test_points": False},
+                "gpio": [{"name": "only", "pin": 5}],
+            }
+        )
         generate(bare, None, self.out)
         source = (self.out / "src" / "fixture_config.c").read_text()
         self.assertIn("fx_spi_count = 0", source)
+
+    def test_a_leftover_template_placeholder_is_refused(self):
+        """A placeholder that survives into the output would compile to nothing sensible."""
+        template = _ROOT / "src" / "pinside" / "firmware" / "templates" / "fixture_core.h"
+        original = template.read_text()
+        try:
+            template.write_text(original + "\n#define OOPS PINSIDE__NO_SUCH_MARKER\n")
+            with self.assertRaises(GenerationError) as caught:
+                generate(self.cfg, self.board, self.out)
+            codes = {f.code for f in caught.exception.findings}
+            self.assertEqual(codes, {"PF004"})
+        finally:
+            template.write_text(original)
 
     def test_it_refuses_to_overwrite_a_directory_it_did_not_create(self):
         (self.out / "someone_elses_work.txt").write_text("mine")
         with self.assertRaises(GenerationError):
             generate(self.cfg, self.board, self.out)
-        generate(self.cfg, self.board, self.out, force=True)   # explicit consent
+        generate(self.cfg, self.board, self.out, force=True)  # explicit consent
 
 
 @unittest.skipUnless(shutil.which("cc"), "no C compiler")
@@ -316,8 +420,11 @@ class TestGeneratedFirmwareBuilds(unittest.TestCase):
         try:
             generate(cfg, board, out)
             proc = subprocess.run([str(out / "test" / "run.sh")], capture_output=True, text=True)
-            self.assertEqual(proc.returncode, 0,
-                             f"generated firmware tests failed:\n{proc.stdout}\n{proc.stderr}")
+            self.assertEqual(
+                proc.returncode,
+                0,
+                f"generated firmware tests failed:\n{proc.stdout}\n{proc.stderr}",
+            )
             self.assertIn("0 failures", proc.stdout)
         finally:
             shutil.rmtree(out, ignore_errors=True)

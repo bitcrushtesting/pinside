@@ -20,7 +20,7 @@ typedef struct {
   bool level[MOCK_PINS];
   int direction[MOCK_PINS];
   int pull[MOCK_PINS];
-  bool floating[MOCK_PINS];   /* released: high-Z, reading whatever the DUT presents */
+  bool floating[MOCK_PINS]; /* released: high-Z, reading whatever the DUT presents */
 
   uint16_t adc[8];
   uint64_t millis;
@@ -38,7 +38,7 @@ typedef struct {
   uint8_t i2c_last_write[MOCK_FIFO];
   size_t i2c_last_write_len;
 
-  uint8_t spi_reply;          /* every SPI read byte comes back as this */
+  uint8_t spi_reply; /* every SPI read byte comes back as this */
   uint8_t spi_last_tx[MOCK_FIFO];
   size_t spi_last_tx_len;
 } mock_state;
@@ -47,8 +47,8 @@ extern mock_state mock;
 
 void mock_reset(void);
 /* The single line most recently written to the host, terminator stripped. */
-const char *mock_last_line(void);
+const char* mock_last_line(void);
 /* Does the captured output contain this substring? */
-bool mock_out_contains(const char *needle);
+bool mock_out_contains(const char* needle);
 
 #endif /* MOCK_HAL_H */
