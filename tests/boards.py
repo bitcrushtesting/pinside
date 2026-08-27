@@ -99,3 +99,17 @@ def troubled() -> str:
     body += _hole("H1", 5, 5, drill=3.5)
     body += _hole("H2", 5, 35, drill=3.0)                    # different drill
     return _wrap(body)
+
+
+def uart_board() -> str:
+    """A board with a full UART, a fault line the DUT drives, and a rail to monitor."""
+    body = rect_outline()
+    for i, (x, y, net) in enumerate([(10, 10, "/DUT_TXD"), (14, 10, "/DUT_RXD"),
+                                     (18, 10, "/DUT_RTS"), (22, 10, "/DUT_CTS"),
+                                     (26, 10, "/PWR_FLT"), (30, 10, "/+3.3V")], start=1):
+        body += _testpoint(f"TP{i}", x, y, net)
+    body += _testpoint("TP90", 10, 20, "GND", value="GND")
+    body += _testpoint("TP91", 22, 20, "GND", value="GND")
+    for i, (x, y) in enumerate([(5, 5), (45, 5), (5, 35), (45, 35)], start=1):
+        body += _hole(f"H{i}", x, y, net="GND")
+    return _wrap(body)

@@ -16,6 +16,35 @@ MOUNTING_HOLE_REF = re.compile(r"^(H|MH|MK)\d+$", re.I)
 GROUND_NET = re.compile(r"^(/)?(GND|GNDA|GNDD|AGND|DGND|VSS|0)$", re.I)
 AUTO_NET = re.compile(r"^(Net-\(|unconnected-)")
 
+# Which bus a probed signal belongs to, decided by its name. First match wins.
+#
+# Grouping matters beyond tidy reporting: a fixture wants each bus on contiguous,
+# peripheral-capable pins, and the scaffolder cannot suggest any without knowing which lines
+# travel together. Names are the only evidence a board file carries about that.
+_BUS_RULES = [
+    ("ground", GROUND_NET),
+    ("i2c", re.compile(r"(^|_)(SCL|SDA)$", re.I)),
+    ("power", re.compile(r"^\+?\d|^(VCC|VDD|VBUS|VBAT|\+3V3|\+3\.3V|\+5V|\+1V\d)$", re.I)),
+    ("uart", re.compile(r"(^|_)(TXD|RXD|TX|RX|RTS|CTS)$", re.I)),
+    ("spi", re.compile(r"(^|_)(MISO|MOSI|SCLK|SCK|CLK|CS|SS|NSS)$", re.I)),
+]
+
+
+def classify(signal: str) -> str:
+    """Group a signal by name: i2c, uart, spi, power, ground, or control.
+
+    Signals sharing a leading token are kept apart by that token elsewhere, so ETH_CLK and
+    DISP_CS both classify as "spi" here and separate into ``spi_eth`` and ``spi_disp`` by prefix.
+    """
+    bare = signal.rsplit("/", 1)[-1]
+    for name, rule in _BUS_RULES:
+        if rule.search(bare):
+            prefix = bare.split("_")[0].lower() if "_" in bare else ""
+            if name in ("spi", "uart") and prefix:
+                return f"{name}_{prefix}"
+            return name
+    return "control"
+
 _EDGE_TAGS = ("gr_line", "gr_rect", "gr_arc", "gr_circle", "gr_poly", "gr_curve")
 
 
@@ -77,6 +106,11 @@ class TestPoint:
 
     fx: float = 0.0   # position in the fixture frame, filled in by transform()
     fy: float = 0.0
+
+    @property
+    def bus(self) -> str:
+        """i2c, uart_<prefix>, spi_<prefix>, power, ground, or control."""
+        return classify(self.signal)
 
     @property
     def anonymous_net(self) -> bool:
