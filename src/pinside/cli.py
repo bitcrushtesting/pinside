@@ -7,11 +7,12 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, modules, pogo
 from .board import read_board, transform
 from .checks import ERROR, WARNING, Limits, run
 from .config import ConfigError, load, resolve_board, validate
 from .firmware import GenerationError, generate
+from .kicad.project import ProjectError, generate_project
 from .report import FORMATS
 from .scaffold import scaffold
 
@@ -93,7 +94,14 @@ def cmd_init(args) -> int:
             pass
 
     try:
-        draft = scaffold(board, name=name, mcu=args.mcu, board_path=board_path)
+        draft = scaffold(
+            board,
+            name=name,
+            mcu=args.mcu,
+            board_path=board_path,
+            module_name=args.board,
+            probe=args.probe,
+        )
     except ValueError as err:
         print(f"pinside: {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -119,6 +127,46 @@ def cmd_init(args) -> int:
         "pinside: this is a draft -- check the bus grouping and directions before generating",
         file=sys.stderr,
     )
+    return EXIT_OK
+
+
+def cmd_project(args) -> int:
+    try:
+        cfg = load(args.config)
+        board = resolve_board(cfg, args.board)
+    except ConfigError as err:
+        print(f"pinside: {err}", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        result = generate_project(cfg, board, args.out, force=args.force)
+    except ProjectError as err:
+        print(f"pinside: {err}", file=sys.stderr)
+        _print_findings(err.findings)
+        return EXIT_ERROR
+
+    if result.findings:
+        _print_findings(result.findings)
+    probe = cfg.probe_part
+    print(f"pinside: wrote {len(result.files)} files to {result.out_dir}", file=sys.stderr)
+    print(
+        f"pinside: {result.probes_placed} probes placed at their DUT coordinates "
+        f"({probe.receptacle})",
+        file=sys.stderr,
+    )
+    if result.unplaced:
+        print(
+            f"pinside: {len(result.unplaced)} channel(s) had no test point to sit on: "
+            f"{', '.join(result.unplaced)}",
+            file=sys.stderr,
+        )
+    print(
+        "pinside: routing, the controller's placement and the ground pour are left to you",
+        file=sys.stderr,
+    )
+
+    if args.strict and any(f.severity == WARNING for f in result.findings):
+        return EXIT_WARN
     return EXIT_OK
 
 
@@ -254,7 +302,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init.add_argument("board", help="path to the DUT's .kicad_pcb")
     init.add_argument("-o", "--output", help="write here instead of stdout")
-    init.add_argument("--mcu", default="rp2350b", help="target microcontroller")
+    init.add_argument(
+        "--board",
+        default=modules.DEFAULT,
+        choices=[*sorted(modules.MODULES), modules.BARE],
+        help="carrier board the fixture is built around",
+    )
+    init.add_argument("--mcu", default="rp2350b", help="microcontroller, when --board is 'bare'")
+    init.add_argument(
+        "--probe",
+        default=pogo.DEFAULT,
+        choices=sorted(pogo.PROBES),
+        help="spring-pin probe the fixture is drilled for",
+    )
     init.add_argument("--name", help="fixture name (default: the board's filename)")
     init.set_defaults(func=cmd_init, strict=False)
 
@@ -278,6 +338,27 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--strict", action="store_true", help=strict_help)
     gen.set_defaults(func=cmd_generate)
 
+    proj = sub.add_parser(
+        "project",
+        help="generate a KiCad project for the fixture board",
+        description="Write a KiCad project whose probes sit at the DUT's own test-point "
+        "coordinates, with the DUT's outline and mounting holes. Routing is left "
+        "to you; the placement is the part that has to be exact.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    proj.add_argument("config", help="path to the fixture config JSON")
+    proj.add_argument(
+        "--out", default="fixture-board", help="directory to write the KiCad project into"
+    )
+    proj.add_argument("--board", help="use this .kicad_pcb instead of the one the config names")
+    proj.add_argument(
+        "--force",
+        action="store_true",
+        help="write into a non-empty directory pinside did not create",
+    )
+    proj.add_argument("--strict", action="store_true", help=strict_help)
+    proj.set_defaults(func=cmd_project)
+
     return p
 
 
@@ -286,7 +367,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
 
     # `pinside board.kicad_pcb` keeps working as a shorthand for `pinside check`.
-    if argv and not argv[0].startswith("-") and argv[0] not in {"check", "init", "generate"}:
+    known = {"check", "init", "generate", "project"}
+    if argv and not argv[0].startswith("-") and argv[0] not in known:
         argv.insert(0, "check")
 
     args = parser.parse_args(argv)

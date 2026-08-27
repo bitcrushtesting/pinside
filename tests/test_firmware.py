@@ -33,9 +33,10 @@ def codes(cfg, board=None) -> set[str]:
     return {f.code for f in validate(cfg, board)}
 
 
+# A bare RP2350B: the Cuarto 500 case, and the one that needs more pins than a module exposes.
 MINIMAL = {
     "name": "demo",
-    "target": {"mcu": "rp2350b"},
+    "target": {"mcu": "rp2350b", "board": "bare"},
     "dut": {"require_all_test_points": False},
     "gpio": [{"name": "reset", "pin": 24, "direction": "open_drain", "active_low": True}],
 }
@@ -221,7 +222,7 @@ class TestConfigValidation(unittest.TestCase):
         self.assertIn("PF010", codes(cfg))
 
     def test_unknown_mcu_stops_everything_else(self):
-        cfg = from_dict({"name": "x", "target": {"mcu": "atmega328"}})
+        cfg = from_dict({"name": "x", "target": {"mcu": "atmega328", "board": "bare"}})
         self.assertEqual(codes(cfg), {"PF001"})
 
     def test_a_divider_that_would_overrange_the_adc(self):
@@ -253,7 +254,13 @@ class TestConfigAgainstBoard(unittest.TestCase):
         self.assertIn("PF040", codes(cfg, self.board))
 
     def test_a_test_point_the_config_forgot(self):
-        cfg = from_dict({"name": "x", "gpio": [{"name": "a", "pin": 5, "probe": "SCL"}]})
+        cfg = from_dict(
+            {
+                "name": "x",
+                "target": {"board": "bare"},
+                "gpio": [{"name": "a", "pin": 5, "probe": "SCL"}],
+            }
+        )
         findings = validate(cfg, self.board)
         missing = next(f for f in findings if f.code == "PF041")
         self.assertEqual(missing.severity, ERROR)
@@ -271,7 +278,9 @@ class TestConfigAgainstBoard(unittest.TestCase):
         self.assertNotIn(ERROR, {f.severity for f in findings})
 
     def test_not_reading_the_board_is_itself_reported(self):
-        cfg = from_dict({"name": "x", "dut": {"board": "somewhere.kicad_pcb"}})
+        cfg = from_dict(
+            {"name": "x", "target": {"board": "bare"}, "dut": {"board": "somewhere.kicad_pcb"}}
+        )
         self.assertIn("PF002", codes(cfg, None))
 
 

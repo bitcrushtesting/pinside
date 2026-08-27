@@ -20,9 +20,18 @@ grouping and the pin assignment come out of `init` already correct.
 
 ```bash
 pinside init examples/demo-board.kicad_pcb           # the draft, before that edit
+pinside project examples/demo-fixture.json --out /tmp/demo-board
 pinside generate examples/demo-fixture.json --out /tmp/demo-firmware
 /tmp/demo-firmware/test/run.sh                       # host tests, no board needed
 ```
+
+`pinside project` writes the fixture's own KiCad project: 14 probes, each at its DUT test point's
+mirrored coordinates, plus the outline and the four mounting holes. Open it and run **Update PCB
+from Schematic** to bring in the resistors and the Pico 2; the probes stay where they are.
+
+The config targets a **Raspberry Pi Pico 2**, which is the default. Its 26 header GPIO are ample
+for these 14 channels — the Cuarto 500's 34 need a bare RP2350B, which is what `"board": "bare"`
+is for.
 
 The generated `README.md` carries the channel map as a table, and `openrpc.json`
 is the contract an agent reads.

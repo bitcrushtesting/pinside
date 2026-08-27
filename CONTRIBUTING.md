@@ -27,7 +27,10 @@ src/pinside/
     targets.py      what each microcontroller can do with each pin
     config.py       the fixture config, and everything wrong with one (PF...)
     scaffold.py     drafting a config from a board
-    cli.py          check | init | generate
+    modules.py      carrier boards, and which pins they bring out
+    pogo.py         spring-pin probes and the holes they need
+    cli.py          check | init | generate | project
+    kicad/          the KiCad project emitter
     firmware/
         generate.py the emitter
         templates/  the C. Only fixture_config.c is really generated.
@@ -37,9 +40,15 @@ examples/           a small board and config that pass everything
 
 ## The rules that matter
 
-**KiCad files are read, never written.** Text edits break the UUID
-cross-references KiCad keeps, and a corrupted board is expensive. If pinside ever
-needs to write one, it goes through KiCad's own tooling.
+**Existing KiCad files are read, never modified.** Text edits break the UUID
+cross-references KiCad keeps between a symbol, its instance data and the footprint on the board.
+`pinside project` writes *new* projects, which is a different job and a safe one: every
+identifier is derived from the config, so the result is internally consistent and regenerating
+an unchanged config is byte-identical.
+
+**Symbol definitions are copied verbatim, never re-serialised.** KiCad's format distinguishes a
+bare token from a quoted string — `(type default)` and `(shape line)` are not strings — and a
+parse throws that away. Round-tripping a symbol produces a file KiCad silently refuses to open.
 
 **A finding must be actionable.** Each one says what is wrong, which references
 it applies to, and what to do — "GPIO9 cannot be i2c0 sda" is only useful
@@ -81,6 +90,9 @@ config that validates and does not work.
 ```bash
 scripts/lint.sh && scripts/test.sh
 ```
+
+The KiCad-facing tests skip themselves without KiCad installed, so **CI does not cover them** —
+run them locally before changing anything under `kicad/`. They were verified against KiCad 10.0.3.
 
 Both run in CI along with an end-to-end job that installs the wheel and
 generates firmware from `examples/`. If you changed anything under

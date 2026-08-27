@@ -1,7 +1,7 @@
 # Pinside
 
-Read a KiCad board and answer two questions: **can a bed-of-nails fixture be built against it?**
-and **what firmware would that fixture run?**
+Read a KiCad board and answer three questions: **can a bed-of-nails fixture be built against
+it?**, **what does that fixture board look like?**, and **what firmware does it run?**
 
 A pogo-pin fixture is three lists taken from the device under test — where the test pads are,
 where it can be bolted down, and how big it is. All three are already in the `.kicad_pcb`, so
@@ -30,6 +30,7 @@ fixture config drafted from it:
 
 ```bash
 pinside check examples/demo-board.kicad_pcb           # a board with nothing wrong with it
+pinside project examples/demo-fixture.json --out /tmp/demo-board
 pinside generate examples/demo-fixture.json --out /tmp/demo-firmware
 /tmp/demo-firmware/test/run.sh                        # host tests, no board needed
 ```
@@ -44,6 +45,7 @@ pinside check board.kicad_pcb -f svg > plan.svg     # 1:1 drill plan; print and 
 pinside check board.kicad_pcb --mirror x            # the frame for a face-down DUT
 
 pinside init board.kicad_pcb -o fixture.json        # draft a config covering every test point
+pinside project fixture.json --out fixture-board/   # a KiCad project for the fixture
 pinside generate fixture.json --out firmware/       # firmware that matches the board
 ```
 
@@ -102,6 +104,89 @@ pinside board.kicad_pcb --probe-pitch 1.9 --edge-clearance 1.5 --min-pad 0.7
 
 PS010 and PS012 are the two that matter most in practice: both mean *the layout is not finished*,
 and any fixture cut from those coordinates is scrap.
+
+## The fixture board
+
+`pinside project` writes a KiCad project for the fixture itself. The part it generates is the
+part that has to be exact:
+
+- **Every probe at its DUT test point's own coordinates**, carried through the fixture transform.
+- **The outline and mounting holes**, taken from the DUT, so the two boards bolt together.
+- **A pogo receptacle footprint**, generated to the chosen probe's dimensions, with the project's
+  `fp-lib-table` already pointing at it.
+
+Routing is not generated. A ratsnest and an accurate drill plan are the useful part; guessing
+trace paths is not, and an autorouter or a person does it better.
+
+```bash
+pinside project fixture.json --out fixture-board/
+```
+
+It refuses to lay out a fixture against a DUT that has not been laid out itself — unplaced test
+points would put every hole in the wrong place, and nothing about the output would look wrong
+until the boards came back:
+
+```
+pinside: 3 error(s); no project was written
+pinside: error: PS010 30 of 30 test points sit outside the board outline ...
+```
+
+### The default board
+
+The fixture is built around a **Raspberry Pi Pico 2** unless told otherwise. Soldering a module
+onto a carrier costs one part and no support circuitry — no crystal, no flash, no USB connector,
+no regulator — and it unplugs when a probe shorts something.
+
+A module exposes only some of its chip's pins, and pinside checks against the board rather than
+the chip:
+
+```
+error: PF024 1 pins are not brought out on the pico2 [GPIO25 (led)] -- GPIO23/24/25/29 are
+       consumed by the module ... or set target.board to "bare" and put the rp2350a on the
+       fixture itself.
+```
+
+| Board | Chip | GPIO on the header |
+|---|---|---|
+| `pico2` (default) | RP2350A | 26 |
+| `pico2w` | RP2350A + wireless | 26 |
+| `bare` | whatever `target.mcu` says | all of them |
+
+Naming a board is enough — the chip follows from it. A fixture needing more than 26 channels has
+to carry the chip itself, which is what `bare` is for.
+
+### The default probe
+
+`millmax_0985`: a Mill-Max 0985 receptacle with an 0900 spring pin, on a 2.54 mm pitch. The
+receptacle is what makes a fixture maintainable — a worn pin pulls out and a new one goes in.
+
+| Probe | Hole | Pad | Minimum pitch |
+|---|---|---|---|
+| `millmax_0985` (default) | 1.37 mm | 2.29 mm | 2.54 mm |
+| `millmax_0906` | 1.02 mm | 1.70 mm | 1.91 mm |
+| `soldered_1mm` | 1.02 mm | 1.60 mm | 2.00 mm |
+
+The probe sets the spacing limit, so choosing a finer one relaxes the `PS021` check without a
+second edit.
+
+Dimensions are what pinside builds to — check them against your supplier's drawing before
+ordering.
+
+### Mirroring
+
+`fixture.mirror` defaults to `x`, because a bed-of-nails takes the DUT **face-down** onto
+upward-pointing pins. Get it wrong and the board is a perfect mirror image of the one you need.
+Before ordering, print `pinside check <dut> -f svg` at 1:1 and lay the real board on it.
+
+### What KiCad does next
+
+Open the project and run **Update PCB from Schematic**. The resistors and the controller arrive
+from KiCad's own libraries with correct pads and nets, and the probes stay exactly where pinside
+put them — KiCad matches footprints by UUID, and pinside derives those from the config rather
+than randomising them, so regenerating an unchanged config produces a byte-identical project.
+
+`pinside project` needs KiCad installed, because a schematic embeds a copy of every symbol it
+places and the only honest source for those is a KiCad library. `check` and `generate` do not.
 
 ## Firmware
 
@@ -230,9 +315,15 @@ description does not change it; moving a pin does.
 | PF022 | An ADC channel on a pin with no converter |
 | PF023 | One pin claimed by two channels |
 | PF030-PF038 | An unrecognised role, guard, parity, direction, pull, or SPI mode |
+| PF005-PF007 | An unknown board or probe, or a chip the board does not carry |
+| PF008 | An unrecognised `fixture.mirror` |
+| PF024 | A pin the carrier board does not bring out |
+| PF025 | The board has almost no GPIO left |
 | PF040 | A probe naming a signal the board does not have |
 | PF041 | A test point with no channel |
 | PF042 | A divider that would present more than the ADC reference |
+
+`pinside project` additionally reports the board findings (`PS...`) and refuses on any error.
 
 ## As a library
 
@@ -263,7 +354,8 @@ into `.venv-tools/`, so CI and your machine run the same one.
 The test suite builds its own synthetic boards, so it depends on no real project and no KiCad
 install. One test goes further and compiles the generated firmware, then runs *its* tests — the
 only check that the C templates and the generated tables actually agree. It skips if there is no
-compiler.
+compiler. Another generates a KiCad project and runs KiCad's own ERC and DRC over it; it skips
+without KiCad, so **that path is verified locally rather than in CI**.
 
 ```
 src/pinside/
@@ -275,7 +367,10 @@ src/pinside/
     targets.py      what each microcontroller can do with each pin
     config.py       the fixture config, and everything wrong with one (PF...)
     scaffold.py     drafting a config from a board
-    cli.py          check | init | generate
+    modules.py      carrier boards, and which pins they bring out
+    pogo.py         spring-pin probes and the holes they need
+    cli.py          check | init | generate | project
+    kicad/          the KiCad project emitter
     firmware/       the emitter, and the C templates it emits
 ```
 

@@ -19,8 +19,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import targets
-from .board import Board, read_board
+from . import modules, pogo, targets
+from .board import Board, read_board, transform
 from .checks import ERROR, INFO, WARNING, Finding
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -111,6 +111,9 @@ class FixtureConfig:
     name: str
     description: str = ""
     mcu: str = "rp2350b"
+    board: str = modules.DEFAULT
+    probe: str = pogo.DEFAULT
+    mirror: str = "x"
     clock_hz: int = 150_000_000
     usb: dict = field(default_factory=dict)
     dut_board: str = ""
@@ -126,6 +129,15 @@ class FixtureConfig:
     @property
     def target(self) -> targets.Target:
         return targets.get(self.mcu)
+
+    @property
+    def module(self) -> modules.Module | None:
+        """The carrier board, or None when the chip sits on the fixture board itself."""
+        return modules.get(self.board)
+
+    @property
+    def probe_part(self) -> pogo.Probe:
+        return pogo.get(self.probe)
 
     @property
     def buses(self) -> list[Bus]:
@@ -217,11 +229,26 @@ def from_dict(raw: dict, source: str = "") -> FixtureConfig:
     dut_node = raw.get("dut", {})
     if not isinstance(dut_node, dict):
         raise ConfigError("'dut' must be an object")
+    fixture_node = raw.get("fixture", {})
+    if not isinstance(fixture_node, dict):
+        raise ConfigError("'fixture' must be an object")
+
+    # A carrier board already determines the chip, so naming both is a chance to disagree.
+    # Stating the chip explicitly still wins -- and is then checked against the board.
+    board_name = target_node.get("board", modules.DEFAULT)
+    try:
+        carrier = modules.get(board_name)
+    except ValueError:
+        carrier = None
+    default_mcu = carrier.mcu if carrier else "rp2350b"
 
     cfg = FixtureConfig(
         name=_require(raw, "name", "config", str),
         description=raw.get("description", ""),
-        mcu=target_node.get("mcu", "rp2350b"),
+        mcu=target_node.get("mcu", default_mcu),
+        board=board_name,
+        probe=fixture_node.get("probe", pogo.DEFAULT),
+        mirror=fixture_node.get("mirror", "x"),
         clock_hz=int(target_node.get("clock_hz", 150_000_000)),
         usb=dict(target_node.get("usb", {})),
         dut_board=dut_node.get("board", ""),
@@ -323,6 +350,66 @@ def _check_names(cfg: FixtureConfig) -> list[Finding]:
             )
         seen[ch.name] = ch.kind
     return out
+
+
+def _check_module(cfg: FixtureConfig) -> list[Finding]:
+    """A carrier board brings out only some of its chip's pins, and that is easy to forget."""
+    try:
+        module = cfg.module
+    except ValueError as err:
+        return [Finding("PF005", ERROR, str(err), [cfg.board])]
+    if module is None:
+        return []
+
+    out: list[Finding] = []
+    if module.mcu != cfg.mcu:
+        out.append(
+            Finding(
+                "PF006",
+                ERROR,
+                f"board {module.name!r} carries {module.mcu}, but the config says {cfg.mcu}",
+                [cfg.board],
+                f"set target.mcu to {module.mcu}, or choose a board that carries {cfg.mcu}",
+            )
+        )
+        return out
+
+    claimed = sorted(cfg.pin_owners())
+    hidden = module.unexposed(claimed)
+    if hidden:
+        owners = cfg.pin_owners()
+        out.append(
+            Finding(
+                "PF024",
+                ERROR,
+                f"{len(hidden)} pins are not brought out on the {module.name}",
+                [f"GPIO{g} ({owners[g]})" for g in hidden],
+                f"{module.description}. {module.note} "
+                f'Use a board that exposes them, or set target.board to "bare" and put the '
+                f"{cfg.mcu} on the fixture itself.",
+            )
+        )
+
+    spare = len(module.gpios) - len(claimed)
+    if 0 <= spare < 2 and not hidden:
+        out.append(
+            Finding(
+                "PF025",
+                INFO,
+                f"the {module.name} has {spare} unused GPIO left",
+                [module.name],
+                "no room for another probe without changing board",
+            )
+        )
+    return out
+
+
+def _check_probe(cfg: FixtureConfig) -> list[Finding]:
+    try:
+        _ = cfg.probe_part
+    except ValueError as err:
+        return [Finding("PF007", ERROR, str(err), [cfg.probe])]
+    return []
 
 
 def _check_pins(cfg: FixtureConfig, target: targets.Target) -> list[Finding]:
@@ -448,6 +535,16 @@ def _check_settings(cfg: FixtureConfig) -> list[Finding]:
             )
         if u.baud <= 0:
             out.append(Finding("PF034", ERROR, f"{u.name}: baud must be positive", [u.name]))
+    if cfg.mirror not in ("none", "x", "y"):
+        out.append(
+            Finding(
+                "PF008",
+                ERROR,
+                f"fixture.mirror {cfg.mirror!r} is not recognised",
+                [cfg.mirror],
+                "expected none, x or y",
+            )
+        )
     for s in cfg.spi:
         if s.mode not in SPI_MODES:
             out.append(Finding("PF035", ERROR, f"{s.name}: SPI mode {s.mode} is not 0-3", [s.name]))
@@ -539,7 +636,13 @@ def validate(cfg: FixtureConfig, board: Board | None = None) -> list[Finding]:
     except ValueError as err:
         return [Finding("PF001", ERROR, str(err), [cfg.mcu])]
 
-    findings = _check_names(cfg) + _check_pins(cfg, target) + _check_settings(cfg)
+    findings = (
+        _check_names(cfg)
+        + _check_pins(cfg, target)
+        + _check_settings(cfg)
+        + _check_module(cfg)
+        + _check_probe(cfg)
+    )
     if board is not None:
         findings += _check_against_board(cfg, board)
     elif cfg.dut_board:
@@ -558,7 +661,12 @@ def validate(cfg: FixtureConfig, board: Board | None = None) -> list[Finding]:
 
 
 def resolve_board(cfg: FixtureConfig, override: str | None = None) -> Board | None:
-    """Read the DUT board the config points at. Relative paths are relative to the config."""
+    """Read the DUT board the config points at, already in the fixture's own frame.
+
+    The transform is applied here rather than by each caller, because a board carried around
+    untransformed has fx/fy of zero -- which does not look wrong, it looks like every probe is
+    at the origin, and that is a fixture with all its holes drilled in one place.
+    """
     path = override or cfg.dut_board
     if not path:
         return None
@@ -567,4 +675,4 @@ def resolve_board(cfg: FixtureConfig, override: str | None = None) -> Board | No
         candidate = (Path(cfg.source).parent / candidate).resolve()
     if not candidate.exists():
         raise ConfigError(f"DUT board not found: {candidate}")
-    return read_board(str(candidate))
+    return transform(read_board(str(candidate)), origin="outline", mirror=cfg.mirror)

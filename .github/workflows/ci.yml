@@ -81,6 +81,19 @@ jobs:
           pinside init examples/demo-board.kicad_pcb -o /tmp/draft.json
           pinside generate /tmp/draft.json --dry-run
 
+      # KiCad is not installed on the runner, so project generation must fail with a message
+      # that says why, rather than emitting a schematic full of broken symbols.
+      - name: Without KiCad, project generation explains itself
+        run: |
+          set +e
+          pinside project examples/demo-fixture.json --out /tmp/no-kicad 2>/tmp/project.err
+          status=$?
+          set -e
+          cat /tmp/project.err
+          test "$status" -ne 0
+          grep -q "KiCad" /tmp/project.err
+          test ! -e /tmp/no-kicad/pinside.pretty
+
       - name: Generate firmware and run its own tests
         run: |
           pinside generate examples/demo-fixture.json --out /tmp/demo-firmware

@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from collections import OrderedDict
 
-from . import targets
+from . import modules, pogo, targets
 from .board import Board
 
 # Signal-name suffix -> the fixture pin role that must face it. Longest match wins.
@@ -57,33 +57,45 @@ def _facing(signal: str, table: OrderedDict) -> str | None:
 
 
 class _Allocator:
-    """Hands out pins that the target can actually use for the role being asked for."""
+    """Hands out pins the target can use for the role asked for -- and that the board exposes.
 
-    def __init__(self, target: targets.Target):
+    The second half matters as much as the first. A Pico 2 carries a chip with 30 GPIO and brings
+    26 to the header, so allocating against the chip alone drafts a config that cannot be built.
+    """
+
+    def __init__(self, target: targets.Target, module: modules.Module | None = None):
         self.target = target
+        self.available = module.gpios if module else set(range(target.gpio_count))
         self.taken: set[int] = set()
+
+    def _free(self, pin: int) -> bool:
+        return pin in self.available and pin not in self.taken
 
     def take(self, kind: str, instance: int, role: str) -> int | None:
         for pin in self.target.pins_for(kind, instance, role):
-            if pin not in self.taken and self.target.adc_of(pin) is None:
+            if self._free(pin) and self.target.adc_of(pin) is None:
                 self.taken.add(pin)
                 return pin
         return None
 
     def take_plain(self) -> int | None:
         """Any free pin with no analogue duty, for a bare GPIO."""
-        for pin in range(self.target.gpio_count):
-            if pin not in self.taken and self.target.adc_of(pin) is None:
+        for pin in sorted(self.available):
+            if self._free(pin) and self.target.adc_of(pin) is None:
                 self.taken.add(pin)
                 return pin
         return None
 
     def take_adc(self) -> tuple[int, int] | None:
         for pin, channel in sorted(self.target.adc_pins.items()):
-            if pin not in self.taken:
+            if self._free(pin):
                 self.taken.add(pin)
                 return pin, channel
         return None
+
+    @property
+    def exhausted(self) -> bool:
+        return not (self.available - self.taken)
 
 
 def _group_signals(board: Board) -> dict[str, list[str]]:
@@ -101,9 +113,19 @@ def _bus_prefix(signals: list[str]) -> str:
     return heads.pop() if len(heads) == 1 else ""
 
 
-def scaffold(board: Board, name: str, mcu: str = "rp2350b", board_path: str = "") -> dict:
+def scaffold(
+    board: Board,
+    name: str,
+    mcu: str | None = None,
+    board_path: str = "",
+    module_name: str = modules.DEFAULT,
+    probe: str = pogo.DEFAULT,
+) -> dict:
+    module = modules.get(module_name)
+    # A carrier board decides the chip; only a bare fixture leaves the choice open.
+    mcu = module.mcu if module else (mcu or "rp2350b")
     target = targets.get(mcu)
-    alloc = _Allocator(target)
+    alloc = _Allocator(target, module)
     groups = _group_signals(board)
 
     config: dict = {
@@ -111,9 +133,12 @@ def scaffold(board: Board, name: str, mcu: str = "rp2350b", board_path: str = ""
         "description": f"Bed-of-nails fixture for {board_path or board.source}",
         "target": {
             "mcu": mcu,
+            "board": module.name if module else modules.BARE,
             "clock_hz": target.default_clock_hz,
             "usb": {"product": f"{name} fixture"},
         },
+        # A bed-of-nails takes the DUT face-down onto upward-pointing pins, which mirrors X.
+        "fixture": {"probe": probe, "mirror": "x"},
         "dut": {
             "board": board_path or board.source,
             "logic_voltage": 3.3,

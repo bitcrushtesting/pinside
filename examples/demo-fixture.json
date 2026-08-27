@@ -2,11 +2,15 @@
   "name": "demo-fixture",
   "description": "A worked example: one UART, one I2C bus, one SPI bus, two control lines and a rail monitor.",
   "target": {
-    "mcu": "rp2350b",
+    "mcu": "rp2350a",
+    "board": "pico2",
     "clock_hz": 150000000,
     "usb": {
       "product": "demo-fixture fixture"
     }
+  },
+  "fixture": {
+    "probe": "millmax_0985"
   },
   "dut": {
     "board": "demo-board.kicad_pcb",
@@ -105,7 +109,7 @@
     {
       "name": "ch_3_3v",
       "description": "+3.3V rail, through a 2:1 divider",
-      "pin": 40,
+      "pin": 26,
       "probe": "+3.3V",
       "divider": 2.0,
       "nominal_v": 3.3,

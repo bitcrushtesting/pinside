@@ -13,6 +13,28 @@ existing agents wrong.
 
 ## [Unreleased]
 
+### Added
+
+- `pinside project` writes a KiCad project for the fixture board: every probe at its DUT test
+  point's own coordinates, the DUT's outline and mounting holes, and a generated pogo receptacle
+  footprint. Routing is deliberately not generated.
+- Carrier boards (`target.board`), defaulting to the **Raspberry Pi Pico 2**. A module exposes
+  only some of its chip's pins, and configs are now checked against the board rather than the
+  chip (`PF024`). Naming a board determines the chip.
+- A spring-pin catalogue (`fixture.probe`), defaulting to the Mill-Max 0985 receptacle. The probe
+  sets the minimum spacing, so a finer pin relaxes `PS021` without a second edit.
+- `fixture.mirror`, defaulting to `x` — a bed-of-nails takes the DUT face-down.
+
+### Fixed
+
+- `resolve_board` now applies the fixture transform. It did not, so `fx`/`fy` were zero
+  everywhere: not obviously wrong, just every probe at the origin.
+
+### Note
+
+Generating a project needs KiCad installed, because a schematic embeds a copy of every symbol it
+places. `check` and `generate` still need nothing.
+
 ## [0.1.0]
 
 First release.
