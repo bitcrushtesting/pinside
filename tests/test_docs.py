@@ -78,10 +78,14 @@ class Versions(unittest.TestCase):
     that disagrees with pyproject, which is the right place to catch it and the latest."""
 
     def _pyproject_version(self) -> str:
-        import tomllib
-
-        raw = (_ROOT / "pyproject.toml").read_bytes()
-        return tomllib.loads(raw.decode())["project"]["version"]
+        # Not tomllib: that is 3.11 and later, and pinside supports 3.10. The whole point of
+        # this file is to notice when something claims a version it does not have, so it would
+        # be a poor place to depend on one.
+        text = (_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        project = text.split("\n[project]\n", 1)[1].split("\n[", 1)[0]
+        found = re.search(r'^version\s*=\s*"([^"]+)"', project, re.M)
+        self.assertIsNotNone(found, "pyproject.toml has no version in [project]")
+        return found.group(1)
 
     def test_the_package_and_the_metadata_agree(self):
         import pinside
