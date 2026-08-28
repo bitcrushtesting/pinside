@@ -51,6 +51,21 @@ jobs:
       - name: Run tests
         run: scripts/test.sh --verbose
 
+      # Once, not on every interpreter: the number is about which code paths
+      # the suite reaches, and that does not vary by Python version.
+      - name: Coverage
+        if: matrix.python == '3.13'
+        run: scripts/test.sh --coverage
+
+      # The client tests run against a fake port either way. With pyserial here
+      # two more run against pyserial's own loop:// port, which is what caught
+      # the client accepting an echoed request as a response.
+      - name: The client, against real pyserial
+        if: matrix.python == '3.13'
+        run: |
+          python -m pip install 'pyserial>=3.5'
+          scripts/test.sh --verbose
+
   example:
     name: End to end
     runs-on: ubuntu-latest
@@ -64,6 +79,20 @@ jobs:
       # templates are packaged as data rather than left behind in the sdist.
       - name: Install
         run: python -m pip install .
+
+      # The core must work with nothing else installed. If this ever needs a
+      # dependency to run, the claim on the front of the README is false.
+      - name: Nothing but the standard library is installed
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          installed = {d.metadata["Name"].lower() for d in md.distributions()}
+          # pip and its own bundled bits are the venv, not pinside's dependencies.
+          allowed = {"pinside", "pip", "setuptools", "wheel", "pkg-resources"}
+          extra = sorted(installed - allowed)
+          assert not extra, f"pinside pulled in {extra}"
+          print("clean:", sorted(installed))
+          PY
 
       - name: Check the example board
         run: pinside check examples/demo-board.kicad_pcb --strict
@@ -99,7 +128,27 @@ jobs:
           pinside generate examples/demo-fixture.json --out /tmp/demo-firmware
           /tmp/demo-firmware/test/run.sh
 
-      - name: The generated contract is valid JSON and names the config hash
+      # `probe` is the one command that needs an optional dependency. Both
+      # halves are worth asserting: that it says how to install it, and that it
+      # works once installed.
+      - name: probe explains its missing dependency, then works with it
+        run: |
+          set +e
+          pinside probe examples/demo-fixture.json 2>/tmp/probe.err
+          status=$?
+          set -e
+          cat /tmp/probe.err
+          test "$status" -ne 0
+          grep -q "pinside\[client\]" /tmp/probe.err
+          python -m pip install '.[client]'
+          pinside probe examples/demo-fixture.json --port loop:// --timeout 1 2>/tmp/probe2.err \
+            && { echo "a loopback should not pass as a fixture" >&2; exit 1; }
+          cat /tmp/probe2.err
+
+      # The contract's real validation lives in tests/test_contract.py, which checks it against
+      # the firmware's own dispatch table. What is left for this job is the thing only an
+      # installed wheel can show: that openrpc.json is shipped and generated at all.
+      - name: The installed package generates a usable contract
         run: |
           python - <<'PY'
           import json, pathlib
@@ -110,6 +159,96 @@ jobs:
           print(len(contract["methods"]), "methods,",
                 len(contract["x-pinside"]["channels"]), "channels")
           PY
+
+  kicad:
+    name: KiCad project generation
+    runs-on: ubuntu-latest
+    # tests/test_kicad.py generates a fixture project and runs KiCad's own ERC
+    # and DRC over it. Without KiCad it skips, which meant the whole emitter
+    # under src/pinside/kicad/ -- the code that has to produce a file KiCad will
+    # actually open -- was only ever checked on a developer's machine.
+    container: kicad/kicad:10.0
+    steps:
+      - uses: actions/checkout@v7
+      # The image runs as the kicad user and the checkout lands owned by root.
+      # Without this, git refuses to look at the tree and the scripts fail
+      # before a single test runs.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Versions
+        run: |
+          kicad-cli version
+          python3 --version
+      # Not scripts/test.sh: the image's Python is the one KiCad ships with, and
+      # the script's venv handling is for the tooling, not the interpreter.
+      #
+      # PINSIDE_REQUIRE_KICAD turns this job's reason for existing into an
+      # assertion. Without it, a container that stopped shipping kicad-cli, or
+      # a symbol path that moved, would make the tests skip and the job pass:
+      # green, and covering nothing.
+      - name: Run the suite, KiCad tests included
+        env:
+          PINSIDE_REQUIRE_KICAD: "1"
+        run: PYTHONPATH=src python3 -m unittest discover -s tests --verbose
+
+  firmware:
+    name: Firmware against the Pico SDK
+    runs-on: ubuntu-latest
+    # The host tests in the `test` job compile fixture_core.c against the mock
+    # HAL, which never touches fixture_hal_rp2350.c. That file is the half of
+    # the firmware that talks to real hardware, and until this job existed the
+    # only thing checking it was clang-format.
+    env:
+      PICO_SDK_VERSION: "2.1.1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install the ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi cmake ninja-build
+
+      - name: Cache the SDK
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: pico-sdk
+          key: pico-sdk-${{ env.PICO_SDK_VERSION }}
+
+      # Pinned to a tag, not to master: an SDK that moves under the templates
+      # turns a template bug and an upstream change into the same red job.
+      - name: Fetch the SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --branch "$PICO_SDK_VERSION" --depth 1 \
+            https://github.com/raspberrypi/pico-sdk.git pico-sdk
+          git -C pico-sdk submodule update --init --depth 1
+
+      - name: Install
+        run: python -m pip install .
+
+      - name: Generate the demo firmware
+        run: pinside generate examples/demo-fixture.json --out /tmp/fw
+
+      - name: Cross-compile it
+        env:
+          PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
+        run: |
+          cmake -S /tmp/fw -B /tmp/fw/build -G Ninja
+          cmake --build /tmp/fw/build
+          # A UF2 is the artefact you actually flash. CMake will happily produce
+          # an ELF and no UF2 if the SDK's post-build step was never wired up.
+          find /tmp/fw/build -name '*.uf2' -print | grep -q . \
+            || { echo "no .uf2 was produced" >&2; exit 1; }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: demo-firmware-uf2
+          path: /tmp/fw/build/**/*.uf2
+          if-no-files-found: error
 
   package:
     name: Package

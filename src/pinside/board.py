@@ -15,6 +15,17 @@ MOUNTING_HOLE_REF = re.compile(r"^(H|MH|MK)\d+$", re.I)
 GROUND_NET = re.compile(r"^(/)?(GND|GNDA|GNDD|AGND|DGND|VSS|0)$", re.I)
 AUTO_NET = re.compile(r"^(Net-\(|unconnected-)")
 
+# A supply rail. KiCad's own power symbols produce most of these names, and the leading + is
+# the convention for a numbered rail (+3V3, +5V, +1V8).
+POWER_NET = re.compile(r"^\+|^(VCC|VDD|VBUS|VBAT|VIN|VSYS|AVDD|DVDD)([_A-Z0-9]*)$", re.I)
+
+# The lines that decide whether a fixture can put the DUT into a known state. A fixture that
+# reaches every data bus and none of these can read a board it cannot reset, which is the
+# difference between a test rig and a monitor.
+CONTROL_NET = re.compile(
+    r"(^|/|_)(N?RE?SET|NRST|RST|BOOT\d*|BOOTSEL|PROG|EN|ENABLE|PWR_?EN|SHDN|WAKE)$", re.I
+)
+
 # Which bus a probed signal belongs to, decided by its name. First match wins.
 #
 # Grouping matters beyond tidy reporting: a fixture wants each bus on contiguous,
@@ -59,6 +70,7 @@ class Pad:
     net: str
     x: float  # absolute, footprint rotation applied
     y: float
+    net_ordinal: int | None = None  # None in the KiCad 10 form, which has no ordinals
 
     @property
     def max_dimension(self) -> float:
@@ -144,15 +156,53 @@ class Board:
     obstacles: list[Footprint]  # every other placed footprint, for collision checks
     frame: dict = field(default_factory=dict)
 
+    # ordinal -> every name the file gives it, from the net table and from every pad. Empty for
+    # a KiCad 10 board, which has no ordinals to disagree about.
+    net_ordinals: dict[int, set[str]] = field(default_factory=dict)
+
+    @property
+    def nets(self) -> set[str]:
+        """Every named net the board file mentions, from any pad on any footprint.
+
+        A .kicad_pcb has no net list of its own worth reading -- the names live on the pads --
+        so this is assembled rather than parsed. Auto-named nets are left out: they carry no
+        intent, so their absence from the probe list says nothing.
+        """
+        found = {pad.net for fp in self.obstacles for pad in fp.pads}
+        found |= {t.net for t in self.test_points}
+        found |= {h.net for h in self.mounting_holes}
+        return {n for n in found if n and not AUTO_NET.match(n.rsplit("/", 1)[-1])}
+
+    @property
+    def probed_nets(self) -> set[str]:
+        return {t.net for t in self.test_points if t.net}
+
+
+def _net_ref(node) -> tuple[int | None, str]:
+    """The (ordinal, name) a `(net ...)` expression carries.
+
+    KiCad <= 9 writes `(net <ordinal> "NAME")` and keys the net by the *ordinal*: the name is a
+    label. KiCad 10 writes `(net "NAME")` and the name is the identity. A zone writes `(net 3)`
+    with no name at all. All three shapes turn up, so the ordinal is read rather than skipped:
+    two names sharing one ordinal is a board that loses nets the moment KiCad opens it, and
+    nothing else in the file gives that away.
+    """
+    if node is None:
+        return None, ""
+    if len(node) > 2 and isinstance(node[2], str):
+        try:
+            return int(node[1]), node[2]
+        except (TypeError, ValueError):
+            return None, node[2]
+    token = atom(node, 1)
+    try:
+        return int(token), ""  # a zone's bare (net 3)
+    except ValueError:
+        return None, token  # KiCad 10's (net "NAME")
+
 
 def _net_of(pad_node) -> str:
-    """KiCad <= 9 writes (net <ordinal> "NAME"); KiCad 10 writes (net "NAME")."""
-    net = child(pad_node, "net")
-    if net is None:
-        return ""
-    if len(net) > 2 and isinstance(net[2], str):
-        return net[2]
-    return atom(net, 1)
+    return _net_ref(child(pad_node, "net"))[1]
 
 
 def _property(footprint, name: str) -> str:
@@ -175,6 +225,7 @@ def _read_pad(node, fx: float, fy: float, rot: float) -> Pad:
     drill_node = child(node, "drill")
     drill_vals = floats(drill_node) if drill_node is not None else []
     layers = child(node, "layers")
+    ordinal, net_name = _net_ref(child(node, "net"))
     return Pad(
         number=atom(node, 1, "?"),
         type=atom(node, 2, "?"),
@@ -182,7 +233,8 @@ def _read_pad(node, fx: float, fy: float, rot: float) -> Pad:
         size=(size[0], size[1]) if len(size) >= 2 else None,
         drill=max(drill_vals) if drill_vals else None,
         layers=[t for t in (layers[1:] if layers else []) if isinstance(t, str)],
-        net=_net_of(node),
+        net=net_name,
+        net_ordinal=ordinal,
         x=fx + dx,
         y=fy + dy,
     )
@@ -268,8 +320,23 @@ def read_outline(tree) -> g.Outline:
             outline.shapes.append(shape)
             outline.segments.extend(g.polyline_segments(points))
 
-    outline.ring = g.chain_ring(outline.segments)
+    rings, outline.open_segments = g.chain_rings(outline.segments)
+    outline.ring, outline.cutouts, outline.islands = g.resolve_rings(rings)
     return outline
+
+
+def read_net_ordinals(tree) -> dict[int, set[str]]:
+    """Every net ordinal in the file, with every name attached to it.
+
+    Both the board's own `(net N "NAME")` table and the copy on each pad, because they can
+    disagree with each other and that disagreement is itself the defect.
+    """
+    ordinals: dict[int, set[str]] = {}
+    for node in find_all(tree, "net"):
+        ordinal, name = _net_ref(node)
+        if ordinal is not None and name:
+            ordinals.setdefault(ordinal, set()).add(name)
+    return ordinals
 
 
 def read_board(path: str) -> Board:
@@ -326,6 +393,7 @@ def read_board(path: str) -> Board:
         test_points=test_points,
         mounting_holes=holes,
         obstacles=obstacles,
+        net_ordinals=read_net_ordinals(tree),
     )
 
 

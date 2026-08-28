@@ -17,9 +17,13 @@ from ..config import FixtureConfig
 from ..pogo import Probe
 from .footprint import mounting_hole_shape, pogo_shape
 from .schematic import channel_slots
-from .write import Node, Raw, at, document, effects, num, uid, uid_node
+from .write import NO, YES, Node, Raw, at, document, effects, num, uid, uid_node, xy
 
 PCB_VERSION = "20260206"
+
+# How far the ground pour is held back from the board edge. 0.5 mm clears the copper-to-edge
+# minimum of every fab worth using, and a fixture is not tight for space.
+GROUND_POUR_INSET_MM = 0.5
 
 _LAYERS = [
     (0, "F.Cu", "signal", None),
@@ -69,6 +73,57 @@ class Layout:
                     uid_node(self.project, f"edge.{index}"),
                 )
             )
+
+    def pour(self, polygon, layers: list[str], net_name: str = "GND") -> None:
+        """A filled zone on the given layers, tied to a net.
+
+        Routing is not generated here and deliberately so, but a ground pour is not routing. It
+        is one fixed shape -- the board outline, pulled in by the fab's clearance -- and on a
+        fixture it is most of the return path: the thing every probed signal is measured
+        against. Leaving it out means the first thing anyone does after opening the project is
+        draw the same rectangle by hand.
+
+        The zone is emitted unfilled. KiCad fills it on the first `Edit > Fill All Zones`, and
+        writing a fill polygon here would mean recomputing the fab's clearance rules, badly.
+        """
+        pts = Node("pts")
+        for x, y in polygon:
+            pts.add(xy(x, y))
+
+        zone = Node(
+            "zone",
+            Node("net", Raw(str(self.net(net_name)))),
+            Node("net_name", net_name),
+        )
+        if len(layers) == 1:
+            zone.add(Node("layer", layers[0]))
+        else:
+            layer_node = Node("layers")
+            for name in layers:
+                layer_node.add(name)
+            zone.add(layer_node)
+        zone.add(
+            uid_node(self.project, f"zone.{net_name}.{'.'.join(layers)}"),
+            Node("name", f"{net_name} pour"),
+            Node("hatch", Raw("edge"), num(0.5)),
+            Node(
+                "connect_pads",
+                # Thermal reliefs, not solid: a fixture gets hand-reworked when a pin wears out,
+                # and a ground pad soldered straight into a full pour cannot be desoldered
+                # without lifting it.
+                Node("clearance", num(0.5)),
+            ),
+            Node("min_thickness", num(0.25)),
+            Node("filled_areas_thickness", NO),
+            Node(
+                "fill",
+                YES,
+                Node("thermal_gap", num(0.5)),
+                Node("thermal_bridge_width", num(0.5)),
+            ),
+            Node("polygon", pts),
+        )
+        self.items.append(zone)
 
     def text(
         self, message: str, x: float, y: float, size: float = 1.5, layer: str = "F.SilkS"
@@ -198,11 +253,40 @@ def build(config: FixtureConfig, board: Board | None, probe: Probe) -> str:
 
         box = board.outline.bbox
         if box:
+            # A pour on both copper layers, pulled in from the edge. The inset is the fab's
+            # usual copper-to-edge minimum with room to spare: a zone drawn to the outline gets
+            # clipped anyway, and one drawn past it gets flagged by DRC.
+            layout.pour(_pour_polygon(board, GROUND_POUR_INSET_MM), ["F.Cu", "B.Cu"])
+
             layout.text(f"{config.name}", 2, -6, 2.5)
             layout.text(
                 f"probes {placed}  |  {probe.receptacle}  |  DUT {config.dut_board}", 2, -2, 1.2
             )
     return layout.render()
+
+
+def _pour_polygon(board: Board, inset: float) -> list[tuple[float, float]]:
+    """The rectangle the ground pour fills: the board's extent, pulled in on every side.
+
+    The perimeter's true shape is not used. A pour follows the outline once KiCad fills it --
+    copper stops at the board edge whatever the zone says -- so the honest thing to draw is the
+    simplest boundary that cannot poke outside, which is the bounding box less the inset. Trying
+    to offset an arbitrary polygon inwards is a real geometry problem and this does not need it.
+    """
+    box = board.outline.bbox
+    if box is None:
+        return []
+    frame = board.frame or {}
+    ox, oy = frame.get("offset", [0.0, 0.0])
+    # The fixture frame puts the outline's corner at the origin, so the pour is measured from
+    # there rather than from the DUT's page coordinates.
+    left = box.min_x - ox + inset
+    top = box.min_y - oy + inset
+    right = box.min_x - ox + box.width - inset
+    bottom = box.min_y - oy + box.height - inset
+    if right <= left or bottom <= top:
+        return []  # a board smaller than twice the inset; there is nothing to pour
+    return [(left, top), (right, top), (right, bottom), (left, bottom)]
 
 
 def _probe_map(config: FixtureConfig) -> dict[str, str]:

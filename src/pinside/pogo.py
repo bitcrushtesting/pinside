@@ -36,6 +36,12 @@ class Probe:
     tip: str
     mounting: str = "press-fit"
 
+    # Where the numbers above came from, and whether anyone has checked them against it. These
+    # end up as drill sizes on a board somebody orders, and a receptacle 0.1 mm fatter than
+    # expected is a board that has to be redrilled, so the provenance travels with the values.
+    source: str = ""
+    verified: str = ""  # who checked it against the drawing, and when; empty means nobody has
+
     @property
     def footprint_name(self) -> str:
         return f"PogoPin_{self.name}"
@@ -62,6 +68,7 @@ PROBES: dict[str, Probe] = {
         travel_mm=2.5,
         force_n=0.75,
         tip="crown -- bites through the light oxide on a bare copper or HASL pad",
+        source="Mill-Max catalogue, 0985 receptacle and 0900 spring pin series",
     ),
     # For a board whose test pads were not laid out with a fixture in mind, and which therefore
     # sit closer together than 2.54 mm.
@@ -77,6 +84,7 @@ PROBES: dict[str, Probe] = {
         travel_mm=1.8,
         force_n=0.55,
         tip="crown",
+        source="Mill-Max catalogue, 0906 receptacle and 0850 spring pin series",
     ),
     # No receptacle: the pin is soldered straight into the board. Cheaper and lower profile, at
     # the cost of a soldering iron every time a pin wears out.
@@ -93,10 +101,23 @@ PROBES: dict[str, Probe] = {
         force_n=0.70,
         tip="crown",
         mounting="soldered",
+        source="generic P75-series spring pin; no single supplier drawing, so these are "
+        "the values common to the series rather than any one part",
     ),
 }
 
 DEFAULT = "millmax_0985"
+
+
+def unverified() -> list[Probe]:
+    """Probes whose dimensions nobody has checked against the supplier's own drawing.
+
+    Every entry here was transcribed from a catalogue. That is enough to lay a board out and not
+    enough to order one on: series get revised, and the failure is silent until the boards
+    arrive. Filling in `verified` is a deliberate act by someone who put a drawing next to the
+    numbers, which is why it starts empty rather than defaulting to true.
+    """
+    return [p for p in PROBES.values() if not p.verified]
 
 
 def get(name: str | None = None) -> Probe:

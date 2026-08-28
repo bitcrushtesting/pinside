@@ -2,13 +2,13 @@
 # sources: Google, wrapped at 100 columns.
 #
 # It applies to src/pinside/firmware/templates/, which is where the C actually
-# lives — a generated project is a copy of those files plus one table, so
+# lives: a generated project is a copy of those files plus one table, so
 # formatting the templates is what keeps every generated fixture consistent.
 # There is nothing to format in a generated directory; regenerate instead.
 BasedOnStyle: Google
 ColumnLimit: 100
 
-# The compact lookup tables this code base uses throughout — one case label,
-# one assignment, one return — read better than the exploded form Google
+# The compact lookup tables this code base uses throughout (one case label,
+# one assignment, one return) read better than the exploded form Google
 # defaults to.
 AllowShortCaseLabelsOnASingleLine: true

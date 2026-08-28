@@ -39,6 +39,12 @@ class BBox:
     def contains(self, x: float, y: float) -> bool:
         return self.min_x <= x <= self.max_x and self.min_y <= y <= self.max_y
 
+    def distance_to(self, x: float, y: float) -> float:
+        """Distance from a point to the nearest edge of the box, or 0 inside it."""
+        dx = max(self.min_x - x, 0.0, x - self.max_x)
+        dy = max(self.min_y - y, 0.0, y - self.max_y)
+        return math.hypot(dx, dy)
+
     def as_dict(self) -> dict:
         return {
             "min_x": round(self.min_x, 4),
@@ -52,15 +58,25 @@ class BBox:
 
 @dataclass
 class Outline:
-    """The board edge, as drawn and as flattened."""
+    """The board edge, as drawn and as flattened.
+
+    Edge.Cuts is one layer holding every edge the board has, and a board with a slot, a
+    connector relief or a mouse-bite window has more than one closed shape on it. The largest
+    is the perimeter; anything closed and inside it is a hole in the board, and a probe over
+    one is a probe over nothing.
+    """
 
     shapes: list[dict] = field(default_factory=list)
     segments: list[Segment] = field(default_factory=list)
-    ring: list[Point] = field(default_factory=list)  # empty when the outline is not closed
+    ring: list[Point] = field(default_factory=list)  # the perimeter; empty when nothing closed
+    cutouts: list[list[Point]] = field(default_factory=list)  # closed rings inside the perimeter
+    islands: list[list[Point]] = field(default_factory=list)  # closed rings outside it
+    open_segments: list[Segment] = field(default_factory=list)  # never joined into any ring
 
     @property
     def closed(self) -> bool:
-        return bool(self.ring)
+        """One perimeter, and no edge left dangling. Cutouts do not make an outline open."""
+        return bool(self.ring) and not self.open_segments
 
     @property
     def bbox(self) -> BBox | None:
@@ -72,14 +88,40 @@ class Outline:
         return BBox(min(xs), min(ys), max(xs), max(ys))
 
     def contains(self, x: float, y: float) -> bool:
-        """Inside the board? Uses the true ring when the outline closes, else its bounding box."""
-        if self.ring:
-            return point_in_ring((x, y), self.ring)
-        box = self.bbox
-        return bool(box and box.contains(x, y))
+        """Is there board here? Inside the perimeter and not inside a cutout.
+
+        Falls back to the bounding box when nothing closed, so the geometric checks still say
+        something useful about a board whose edge is broken.
+        """
+        if not self.ring:
+            box = self.bbox
+            return bool(box and box.contains(x, y))
+        if not point_in_ring((x, y), self.ring):
+            return False
+        return not self.in_cutout(x, y)
+
+    def within_perimeter(self, x: float, y: float) -> bool:
+        """Inside the board's extent, cutouts ignored.
+
+        This is the question "was this ever placed", which a cutout does not change: a probe in
+        the middle of a slot is somewhere deliberate and wrong, not still sitting where KiCad
+        dropped it. ``contains`` answers the other question, whether there is board underneath.
+        """
+        if not self.ring:
+            box = self.bbox
+            return bool(box and box.contains(x, y))
+        return point_in_ring((x, y), self.ring)
+
+    def in_cutout(self, x: float, y: float) -> bool:
+        """Inside one of the holes in the board."""
+        return any(point_in_ring((x, y), c) for c in self.cutouts)
 
     def distance_to_edge(self, x: float, y: float) -> float | None:
-        """Shortest distance from a point to the board edge. None when there is no outline."""
+        """Shortest distance to any board edge, cutout edges included.
+
+        A cutout edge is as much of a wall as the perimeter is, so the clearance a probe needs
+        from one is the clearance it needs from the other.
+        """
         if not self.segments:
             return None
         return min(point_segment_distance((x, y), a, b) for a, b in self.segments)
@@ -199,36 +241,82 @@ def point_in_ring(p: Point, ring: list[Point]) -> bool:
     return inside
 
 
-def chain_ring(segments: list[Segment], tolerance: float = JOIN_TOLERANCE) -> list[Point]:
-    """Walk the segments into one closed ring, or return [] if they do not form exactly one.
+def ring_area(ring: list[Point]) -> float:
+    """Enclosed area by the shoelace formula, unsigned so winding direction does not matter."""
+    total = 0.0
+    for (x1, y1), (x2, y2) in polyline_segments(ring):
+        total += x1 * y2 - x2 * y1
+    return abs(total) / 2
 
-    A board edge that does not close is a real defect -- KiCad refuses to fill zones and the fab
-    cannot mill it -- so failing here is a finding, not an inconvenience to route around.
+
+def chain_rings(
+    segments: list[Segment], tolerance: float = JOIN_TOLERANCE
+) -> tuple[list[list[Point]], list[Segment]]:
+    """Walk the segments into as many closed rings as they form.
+
+    Returns (rings, leftovers). A leftover is a segment that never joined anything into a closed
+    shape, which is the real defect: KiCad refuses to fill zones against an open edge and the fab
+    cannot mill it.
+
+    More than one ring is not a defect. A board with a slot, a connector relief or an antenna
+    keepout window has several closed shapes on Edge.Cuts, and treating that as an open outline
+    -- which is what a single-ring walk does -- calls a perfectly good board unbuildable.
     """
-    if not segments:
-        return []
     remaining = list(segments)
-    start, current = remaining[0][0], remaining[0][1]
-    ring = [start, current]
-    remaining.pop(0)
+    rings: list[list[Point]] = []
+    orphans: list[Segment] = []
 
     while remaining:
-        for i, (a, b) in enumerate(remaining):
-            if math.dist(current, a) <= tolerance:
-                current = b
-            elif math.dist(current, b) <= tolerance:
-                current = a
-            else:
-                continue
-            ring.append(current)
-            remaining.pop(i)
-            break
-        else:
-            return []  # a gap: the edge is open, or there is more than one closed shape
-        if math.dist(current, start) <= tolerance:
-            break
+        start, current = remaining.pop(0)
+        path = [start, current]
+        advanced = True
+        while advanced and math.dist(current, start) > tolerance:
+            advanced = False
+            for i, (a, b) in enumerate(remaining):
+                if math.dist(current, a) <= tolerance:
+                    current = b
+                elif math.dist(current, b) <= tolerance:
+                    current = a
+                else:
+                    continue
+                path.append(current)
+                remaining.pop(i)
+                advanced = True
+                break
 
-    if remaining or math.dist(current, start) > tolerance:
-        return []
-    ring[-1] = start
-    return ring
+        # Three points is the least that can enclose anything; two is a line drawn back on
+        # itself, which closes arithmetically and encloses nothing.
+        if math.dist(current, start) <= tolerance and len(path) > 3:
+            path[-1] = start
+            rings.append(path)
+        else:
+            orphans.extend(polyline_segments(path))
+
+    return rings, orphans
+
+
+def chain_ring(segments: list[Segment], tolerance: float = JOIN_TOLERANCE) -> list[Point]:
+    """The single closed ring these segments form, or [] if they do not form exactly one."""
+    rings, orphans = chain_rings(segments, tolerance)
+    return rings[0] if len(rings) == 1 and not orphans else []
+
+
+def resolve_rings(
+    rings: list[list[Point]],
+) -> tuple[list[Point], list[list[Point]], list[list[Point]]]:
+    """Sort closed rings into (perimeter, cutouts, islands).
+
+    The perimeter is the one enclosing the most area. A ring inside it is a hole in the board.
+    A ring outside it is a second board: a panel, or an Edge.Cuts shape somebody left behind.
+    """
+    if not rings:
+        return [], [], []
+    ordered = sorted(rings, key=ring_area, reverse=True)
+    perimeter, rest = ordered[0], ordered[1:]
+    cutouts, islands = [], []
+    for ring in rest:
+        # Any vertex will do to place a ring: rings on this layer do not cross each other, so
+        # one point inside the perimeter means the whole ring is.
+        inside = any(point_in_ring(p, perimeter) for p in ring[:-1])
+        (cutouts if inside else islands).append(ring)
+    return perimeter, cutouts, islands

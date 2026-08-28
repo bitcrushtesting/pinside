@@ -97,6 +97,21 @@ TARGETS: dict[str, Target] = {
         gpio_count=48,
         adc_pins=_rp2350_adc(40, 8),
     ),
+    "rp2354a": Target(
+        name="rp2354a",
+        description="Raspberry Pi RP2354A, QFN-60 with 2 MB stacked flash; RP2350A pinout",
+        gpio_count=30,
+        adc_pins=_rp2350_adc(26, 4),
+    ),
+}
+
+# The stacked-flash parts are the plain ones with flash in the package: same die, same pinout,
+# same peripherals. This records that rather than leaving two copies of a pin map to drift, and
+# tests/test_kicad.py checks it against KiCad's own library, which spells the same relationship
+# as `(symbol "RP2354A" (extends "RP2350A"))`.
+SAME_PINOUT = {
+    "rp2354a": "rp2350a",
+    "rp2354b": "rp2350b",
 }
 
 

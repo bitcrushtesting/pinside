@@ -12,8 +12,8 @@ import math
 from dataclasses import dataclass, field
 from itertools import pairwise
 
-from .board import Board
-from .geometry import BBox
+from .board import CONTROL_NET, POWER_NET, Board
+from .geometry import BBox, ring_area
 
 ERROR, WARNING, INFO = "error", "warning", "info"
 
@@ -23,6 +23,7 @@ class Limits:
     """The physical facts a fixture is built from. Defaults suit a Mill-Max 0985 receptacle."""
 
     probe_pitch: float = 2.54  # centre-to-centre minimum between two receptacles
+    probe_body: float = 1.70  # outside diameter of the receptacle body, at the DUT face
     edge_clearance: float = 2.0  # probe centre to board edge
     hole_clearance: float = 1.0  # probe pad edge to mounting-hole pad edge
     min_pad_diameter: float = 0.9  # DUT pad the spring tip has to land on
@@ -98,25 +99,54 @@ def check_outline(board: Board, limits: Limits) -> list[Finding]:
                 detail="every geometric check below is disabled without one",
             )
         ]
-    if not board.outline.closed:
+    outline = board.outline
+    if not outline.closed:
         return [
             Finding(
                 "PS002",
                 ERROR,
-                "the Edge.Cuts outline does not close into one ring",
+                f"{len(outline.open_segments)} Edge.Cuts segments do not close into a ring",
                 detail="KiCad cannot fill zones and the fab cannot mill it; "
                 "checks fall back to the bounding box",
             )
         ]
-    return []
+
+    out = []
+    if outline.cutouts:
+        out.append(
+            Finding(
+                "PS003",
+                INFO,
+                f"the outline has {len(outline.cutouts)} internal cutouts",
+                [f"{a:.1f}mm2" for a in sorted(ring_area(c) for c in outline.cutouts)],
+                "there is no board over these, so a probe landing on one reaches nothing; "
+                "they are treated as holes, not as a broken outline",
+            )
+        )
+    if outline.islands:
+        out.append(
+            Finding(
+                "PS004",
+                WARNING,
+                f"Edge.Cuts carries {len(outline.islands)} closed shapes outside the board",
+                [f"{a:.1f}mm2" for a in sorted(ring_area(i) for i in outline.islands)],
+                "the largest shape was taken as the board; the rest are a panel, or an outline "
+                "somebody left behind, and either way the fixture is cut to the wrong extent",
+            )
+        )
+    return out
 
 
 def check_placement(board: Board, limits: Limits) -> list[Finding]:
     """Anything sitting outside the board was never placed -- its coordinates are not a location."""
     if not board.outline.segments:
         return []
-    stray = [t.ref for t in board.test_points if not board.outline.contains(t.x, t.y)]
-    stray_holes = [h.ref for h in board.mounting_holes if not board.outline.contains(h.x, h.y)]
+    # within_perimeter, not contains: a probe in the middle of a cutout is inside the board's
+    # extent and is PS013's finding, not this one. Reporting it here too would say it was never
+    # placed, which is both wrong and the opposite of what to do about it.
+    inside = board.outline.within_perimeter
+    stray = [t.ref for t in board.test_points if not inside(t.x, t.y)]
+    stray_holes = [h.ref for h in board.mounting_holes if not inside(h.x, h.y)]
     out = []
     if stray:
         out.append(
@@ -137,6 +167,42 @@ def check_placement(board: Board, limits: Limits) -> list[Finding]:
                 ERROR,
                 f"{len(stray_holes)} mounting holes sit outside the board outline",
                 stray_holes,
+            )
+        )
+    return out
+
+
+def check_cutouts(board: Board, limits: Limits) -> list[Finding]:
+    """A probe over a slot or a window descends through the board and touches nothing.
+
+    This is separate from the outside-the-outline check because it fails the other way round:
+    the coordinates are a real placement, inside the board's extent, and still wrong. Nothing
+    about the drill plan looks odd, and the fault shows up as a channel that reads open on a
+    fixture everybody has already paid for.
+    """
+    if not board.outline.cutouts:
+        return []
+    over = [t.ref for t in board.test_points if board.outline.in_cutout(t.x, t.y)]
+    holes = [h.ref for h in board.mounting_holes if board.outline.in_cutout(h.x, h.y)]
+    out = []
+    if over:
+        out.append(
+            Finding(
+                "PS013",
+                ERROR,
+                f"{len(over)} test points sit over a cutout in the board",
+                over,
+                "there is no copper there and no board to hold it; the probe would pass through",
+            )
+        )
+    if holes:
+        out.append(
+            Finding(
+                "PS014",
+                ERROR,
+                f"{len(holes)} mounting holes sit over a cutout",
+                holes,
+                "nothing to bolt the fixture to",
             )
         )
     return out
@@ -278,6 +344,41 @@ def check_obstructions(board: Board, limits: Limits) -> list[Finding]:
     return []
 
 
+def check_probe_body(board: Board, limits: Limits) -> list[Finding]:
+    """The tip lands clear of the component and the receptacle around it does not.
+
+    PS024 asks where the spring tip comes down. This asks how much room the thing holding it
+    needs: a 0985 receptacle is 1.70 mm across its body, so a probe whose tip clears a QFN by
+    half a millimetre still has that body pressing on the package. The tip lands where it should
+    and the plate never closes far enough for it to make contact.
+    """
+    radius = limits.probe_body / 2
+    close = []
+    for t in board.test_points:
+        for fp in board.obstacles:
+            if fp.side != t.side:
+                continue
+            box: BBox | None = fp.bbox
+            if not box or box.contains(t.x, t.y):
+                continue  # inside is PS024's finding, and a worse one
+            gap = box.distance_to(t.x, t.y)
+            if gap < radius:
+                close.append(f"{t.ref}-{fp.ref} {gap:.2f}mm")
+    if close:
+        return [
+            Finding(
+                "PS027",
+                WARNING,
+                f"{len(close)} probes have less than the {radius:.2f} mm body radius "
+                "to a neighbouring component",
+                close,
+                "the tip clears it but the receptacle body does not, so the plate cannot close; "
+                "use a finer probe or move the pad",
+            )
+        ]
+    return []
+
+
 def check_pad_size(board: Board, limits: Limits) -> list[Finding]:
     small = [
         f"{t.ref} {t.pad.min_dimension:g}mm"
@@ -397,6 +498,108 @@ def check_nets(board: Board, limits: Limits) -> list[Finding]:
     return out
 
 
+def check_net_identity(board: Board, limits: Limits) -> list[Finding]:
+    """Whether the board's netlist survives being opened.
+
+    Through KiCad 9 a net is identified by its *ordinal*; the name beside it is a label. Give two
+    different names the same ordinal and KiCad reads them as one net, keeps whichever name it saw
+    first, and drops the rest to no-net the moment the file is saved. Nothing warns anyone: the
+    file is well-formed, it opens, and fifteen test points quietly stop being connected to
+    anything.
+
+    That is not hypothetical. It is what pinside's own example board did, and pinside called it
+    clean for two releases, because the reader takes the name off each pad and never compares the
+    ordinals. Confirmed against `kicad-cli pcb export ipcd356`, which is KiCad's own answer to
+    "what is this board's netlist".
+
+    Silent on a KiCad 10 board: that format dropped the ordinal, so there is nothing to collide.
+    """
+    out = []
+
+    collisions = {
+        ordinal: sorted(names)
+        for ordinal, names in board.net_ordinals.items()
+        if ordinal != 0 and len(names) > 1
+    }
+    if collisions:
+        # In board order, which read_board already sorted naturally: sorting again here gives
+        # TP1, TP10, TP11, TP2, which reads as though the refs were picked at random.
+        affected = [t.ref for t in board.test_points if t.pad and t.pad.net_ordinal in collisions]
+        out.append(
+            Finding(
+                "PS043",
+                ERROR,
+                f"{len(collisions)} net numbers carry more than one net name",
+                [f"net {n}: {', '.join(names)}" for n, names in sorted(collisions.items())],
+                "KiCad identifies a net by its number, so it reads these as one net and keeps "
+                "only the first name; the rest lose their connection on the next save"
+                + (f". Affects {', '.join(affected)}" if affected else ""),
+            )
+        )
+
+    named_zero = sorted(board.net_ordinals.get(0, ()))
+    if named_zero:
+        refs = [t.ref for t in board.test_points if t.pad and t.pad.net_ordinal == 0 and t.net]
+        out.append(
+            Finding(
+                "PS044",
+                ERROR,
+                f"{len(named_zero)} named nets are on net number 0",
+                refs or named_zero,
+                "net 0 is KiCad's no-connection net, so the name is ignored and these pads probe "
+                "nothing; pinside reads the name and would build a fixture channel for each",
+            )
+        )
+    return out
+
+
+def _bare(net: str) -> str:
+    return net.rsplit("/", 1)[-1]
+
+
+def check_signal_coverage(board: Board, limits: Limits) -> list[Finding]:
+    """Which nets the board has that the fixture will not be able to reach.
+
+    Every other check here asks whether the probes that exist are placed correctly. This one
+    asks what is missing, which is the failure nothing else can see: a fixture that reaches
+    every data bus and no reset line can watch a board it cannot put into a known state, and
+    that is discovered on the bench, after the plate is built.
+    """
+    if not board.test_points:
+        return []
+
+    probed = {_bare(n) for n in board.probed_nets}
+    unprobed = sorted(_bare(n) for n in board.nets if _bare(n) not in probed)
+
+    out = []
+    rails = [n for n in unprobed if POWER_NET.match(n)]
+    if rails:
+        out.append(
+            Finding(
+                "PS033",
+                WARNING,
+                f"{len(rails)} supply rails have no test point",
+                rails,
+                "a rail nobody probes is a rail the fixture cannot prove came up; one pad each "
+                "turns a dead board into a measurement",
+            )
+        )
+
+    control = [n for n in unprobed if CONTROL_NET.search(n) and not POWER_NET.match(n)]
+    if control:
+        out.append(
+            Finding(
+                "PS034",
+                INFO,
+                f"{len(control)} reset or strap lines have no test point",
+                control,
+                "without one the fixture can read the DUT but not put it into a known state, "
+                "so a test that fails cannot be retried from a clean start",
+            )
+        )
+    return out
+
+
 def check_mounting(board: Board, limits: Limits) -> list[Finding]:
     out = []
     holes = board.mounting_holes
@@ -430,7 +633,7 @@ def check_mounting(board: Board, limits: Limits) -> list[Finding]:
         outside = [t.ref for t in board.test_points if not span.contains(t.x, t.y)]
         # Only meaningful once the probes are actually placed.
         placed = board.outline.segments and all(
-            board.outline.contains(t.x, t.y) for t in board.test_points
+            board.outline.within_perimeter(t.x, t.y) for t in board.test_points
         )
         if outside and placed:
             out.append(
@@ -448,16 +651,20 @@ def check_mounting(board: Board, limits: Limits) -> list[Finding]:
 CHECKS = [
     check_outline,
     check_placement,
+    check_cutouts,
     check_import_grid,
     check_stacked,
     check_pitch,
     check_edge_clearance,
     check_hole_clearance,
     check_obstructions,
+    check_probe_body,
     check_pad_size,
     check_sides,
     check_ground,
     check_nets,
+    check_net_identity,
+    check_signal_coverage,
     check_mounting,
 ]
 
