@@ -167,12 +167,18 @@ jobs:
     # and DRC over it. Without KiCad it skips, which meant the whole emitter
     # under src/pinside/kicad/ -- the code that has to produce a file KiCad will
     # actually open -- was only ever checked on a developer's machine.
-    container: kicad/kicad:10.0
+    #
+    # --user root because the image declares USER kicad, and the runner mounts
+    # its own /__w into the container owned by root. As the kicad user,
+    # actions/checkout cannot write /__w/_temp/_runner_file_commands and dies
+    # with EACCES before a single step of ours runs.
+    container:
+      image: kicad/kicad:10.0
+      options: --user root
     steps:
       - uses: actions/checkout@v7
-      # The image runs as the kicad user and the checkout lands owned by root.
-      # Without this, git refuses to look at the tree and the scripts fail
-      # before a single test runs.
+      # Still needed: the checkout is owned by a different uid than git expects,
+      # and git refuses to look at a tree it considers someone else's.
       - name: Trust the checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Versions

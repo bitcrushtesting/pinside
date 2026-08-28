@@ -493,13 +493,20 @@ target_include_directories(${{PROJECT_NAME}} PRIVATE include)
 target_link_libraries(${{PROJECT_NAME}}
     pico_stdlib
     hardware_adc
+    hardware_clocks
     hardware_gpio
     hardware_i2c
     hardware_spi
     hardware_uart
 )
 
-target_compile_options(${{PROJECT_NAME}} PRIVATE -Wall -Wextra)
+# -Werror on implicit declarations, specifically. C11 makes calling an undeclared function a
+# warning, so a missing header compiles cleanly and fails at link with nothing but a symbol
+# name. That is how this project shipped without `hardware/clocks.h`: every translation unit
+# built, and only the linker objected.
+target_compile_options(${{PROJECT_NAME}} PRIVATE
+    -Wall -Wextra -Werror=implicit-function-declaration
+)
 
 # The protocol owns the CDC line; nothing else may write to it.
 pico_enable_stdio_usb(${{PROJECT_NAME}} 1)
