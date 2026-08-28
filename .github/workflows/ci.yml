@@ -185,6 +185,28 @@ jobs:
         run: |
           kicad-cli version
           python3 --version
+
+      # A KiCad install has libraries on disk and a *profile* that maps library
+      # nicknames to them. The profile is created on the first GUI launch, from
+      # KiCad's own templates; kicad-cli never creates one. So in a fresh
+      # container every `MCU_Module:` and `power:` reference is unresolvable and
+      # ERC reports 44 warnings about configuration rather than about the
+      # schematic.
+      #
+      # Seeding the tables is what a first launch does. Verified by reproducing
+      # both halves on a workstation with KICAD_CONFIG_HOME pointed at an empty
+      # directory: 44 violations without them, 0 with.
+      - name: Seed the library tables a first launch would create
+        run: |
+          template=$(find /usr/share/kicad -maxdepth 3 -name sym-lib-table | head -1)
+          test -n "$template" || { echo "no sym-lib-table template in the image" >&2; exit 1; }
+          template=$(dirname "$template")
+          version=$(kicad-cli version | grep -oE '[0-9]+\.[0-9]+' | head -1)
+          config="$HOME/.config/kicad/${version:-10.0}"
+          mkdir -p "$config"
+          cp "$template/sym-lib-table" "$template/fp-lib-table" "$config/"
+          echo "seeded $config from $template:"
+          ls -l "$config"
       # Not scripts/test.sh: the image's Python is the one KiCad ships with, and
       # the script's venv handling is for the tooling, not the interpreter.
       #
