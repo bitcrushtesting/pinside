@@ -198,15 +198,33 @@ jobs:
       # directory: 44 violations without them, 0 with.
       - name: Seed the library tables a first launch would create
         run: |
-          template=$(find /usr/share/kicad -maxdepth 3 -name sym-lib-table | head -1)
-          test -n "$template" || { echo "no sym-lib-table template in the image" >&2; exit 1; }
-          template=$(dirname "$template")
+          # The default tables sit directly in the template directory. KiCad
+          # also ships project templates one level below it, each with its own
+          # pair, and seeding from one of those configures nothing: an earlier
+          # `find | head -1` picked template/Edgeberry_Cartridge and died on its
+          # missing fp-lib-table. Requiring both files in one directory, from a
+          # known location, is what makes that unambiguous.
+          for dir in /usr/share/kicad/template /usr/local/share/kicad/template; do
+            if [ -f "$dir/sym-lib-table" ] && [ -f "$dir/fp-lib-table" ]; then
+              template="$dir"
+              break
+            fi
+          done
+          test -n "${template:-}" || { echo "no default library tables" >&2; exit 1; }
+
           version=$(kicad-cli version | grep -oE '[0-9]+\.[0-9]+' | head -1)
           config="$HOME/.config/kicad/${version:-10.0}"
           mkdir -p "$config"
           cp "$template/sym-lib-table" "$template/fp-lib-table" "$config/"
-          echo "seeded $config from $template:"
-          ls -l "$config"
+
+          # A wrong table copies exactly as successfully as a right one, so
+          # check the result names the libraries the generated schematic uses.
+          for lib in MCU_Module power Device; do
+            grep -q "\"$lib\"" "$config/sym-lib-table" ||
+              { echo "the seeded table does not name $lib" >&2; exit 1; }
+          done
+          echo "seeded $config from $template" \
+               "($(grep -c '(lib ' "$config/sym-lib-table") libraries)"
       # Not scripts/test.sh: the image's Python is the one KiCad ships with, and
       # the script's venv handling is for the tooling, not the interpreter.
       #
