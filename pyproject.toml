@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pinside"
-version = "0.1.0"
+version = "0.2.0"
 description = "Read a KiCad board and check whether a bed-of-nails test fixture can be built against it"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,7 +21,12 @@ dependencies = []
 [project.optional-dependencies]
 # Everything the scripts under scripts/ need. They install it themselves into
 # .venv-tools/ when it is missing, so a fresh checkout needs no setup step.
-dev = ["ruff==0.16.5"]
+dev = ["ruff==0.16.5", "coverage==7.13.0"]
+
+# Talking to a fixture over USB CDC. Only pinside.client and `pinside probe`
+# need this; reading boards, checking them and generating firmware stay
+# dependency-free, which is what lets pinside run anywhere a board file does.
+client = ["pyserial>=3.5"]
 
 [project.urls]
 Repository = "https://github.com/bitcrushtesting/pinside"
@@ -39,6 +44,22 @@ where = ["src"]
 # The firmware templates are the product, not incidental files, and py.typed
 # tells a consumer the annotations are real.
 pinside = ["py.typed", "firmware/templates/*"]
+
+[tool.coverage.run]
+# Measure the package as installed from src/, not the tests that drive it.
+source = ["pinside"]
+branch = true
+
+[tool.coverage.report]
+# The generator's own output is not this package. Templates are C, and the
+# firmware emitter's f-strings are covered by compiling what they produce.
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
 
 [tool.ruff]
 # 100 columns, matching .clang-format, so the Python and the C templates that

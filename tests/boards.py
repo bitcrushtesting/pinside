@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import itertools
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -66,8 +67,103 @@ def _part(ref: str, x: float, y: float, w: float = 4.0, h: float = 2.0) -> str:
   )'''
 
 
+def _part_with_nets(ref: str, x: float, y: float, nets: list[str]) -> str:
+    """A component whose pads carry named nets, for the coverage checks."""
+    pads = "\n".join(
+        f'    (pad "{i}" smd rect (at {i * 1.5 - 3} 0) (size 0.6 1.2) '
+        f'(layers "F.Cu") (net {i + 10} "{net}"))'
+        for i, net in enumerate(nets, start=1)
+    )
+    return f'''
+  (footprint "Package_SO:SOIC-8"
+    (layer "F.Cu")
+    (at {x} {y})
+    (property "Reference" "{ref}")
+    (property "Value" "U")
+{pads}
+  )'''
+
+
 def _wrap(body: str) -> str:
-    return f'(kicad_pcb (version 20241229) (generator "pinside-tests"){body}\n)\n'
+    """Close a board, giving every net its own ordinal and declaring them all.
+
+    The helpers above each write `(net 1 "NAME")`, because a helper cannot know what the rest of
+    the board is using. Left that way every net in the board shares ordinal 1, which is a file
+    KiCad reads as a single net and re-saves with fifteen test points connected to nothing --
+    the defect PS043 exists to catch, and the one the shipped example board had. Numbering
+    happens here because here is the only place that sees the whole board.
+    """
+    names = []
+    for _, name in _NET_REF.findall(body):
+        if name and name not in names:
+            names.append(name)
+    ordinals = {name: i for i, name in enumerate(names, start=1)}
+    body = _NET_REF.sub(
+        lambda m: f'(net {ordinals[m.group(2)]} "{m.group(2)}")' if m.group(2) else m.group(0),
+        body,
+    )
+    table = "".join(f'\n  (net {ordinals[n]} "{n}")' for n in names)
+    return f'(kicad_pcb (version 20241229) (generator "pinside-tests"){table}{body}\n)\n'
+
+
+def without(text: str, *refs: str) -> str:
+    """The same board with these footprints removed, by reference.
+
+    Tests used to do this by rebuilding a helper's output and string-replacing it away, which
+    only worked while the helper's text was byte-identical to what landed in the board. It is
+    not: `_wrap` renumbers the nets, so the reconstructed footprint carries a different ordinal
+    and the replace silently matches nothing, leaving the test asserting against a board it did
+    not build.
+    """
+    wanted = {f'(property "Reference" "{ref}")' for ref in refs}
+    out = []
+    i = 0
+    while True:
+        start = text.find("\n  (footprint ", i)
+        if start == -1:
+            out.append(text[i:])
+            return "".join(out)
+        depth, j = 0, text.index("(", start)
+        while True:
+            if text[j] == "(":
+                depth += 1
+            elif text[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        block = text[start : j + 1]
+        out.append(text[i:start])
+        if not any(marker in block for marker in wanted):
+            out.append(block)
+        i = j + 1
+
+
+def sharing_one_net_ordinal(text: str) -> str:
+    """Put the whole board back on net 1, the way a hand-written .kicad_pcb tends to be."""
+    return _NET_REF.sub(lambda m: f'(net 1 "{m.group(2)}")' if m.group(2) else m.group(0), text)
+
+
+def on_net_zero(text: str, name: str) -> str:
+    """Move one named net onto ordinal 0, KiCad's no-connection net."""
+    return re.sub(rf'\(net \d+ "{re.escape(name)}"\)', f'(net 0 "{name}")', text)
+
+
+_NET_ORDINAL = re.compile(r'\(net \d+ ("[^"]*")\)')
+
+# `(net <ordinal> "NAME")`, with both halves captured.
+_NET_REF = re.compile(r'\(net (\d+) "([^"]*)"\)')
+
+
+def as_kicad10(text: str) -> str:
+    """Rewrite a board the way KiCad 10 writes it.
+
+    KiCad 9 and earlier number the nets in the file, `(net 3 "GND")`; KiCad 10 dropped the
+    ordinal. Any board helper here can be run through this to get the other form, so both
+    branches of ``board._net_of`` are exercised by the same expectations.
+    """
+    text = text.replace("(version 20241229)", "(version 20260206)")
+    return _NET_ORDINAL.sub(r"(net \1)", text)
 
 
 def rect_outline(x1=0.0, y1=0.0, x2=50.0, y2=40.0, radius=0.0) -> str:
@@ -84,6 +180,55 @@ def segment_outline(x1=0.0, y1=0.0, x2=50.0, y2=40.0, gap: bool = False) -> str:
   (gr_line (start {x2} {y1}) (end {x2} {y2}) (layer "Edge.Cuts"))
   (gr_line (start {x2} {y2}) (end {x1} {y2}) (layer "Edge.Cuts"))
   (gr_line (start {x1} {y2}) (end {last_x} {y1}) (layer "Edge.Cuts"))"""
+
+
+def slotted() -> str:
+    """A perfectly good board with a slot milled through it.
+
+    Two closed shapes on Edge.Cuts: the perimeter and the window. A single-ring walk calls this
+    an unclosed outline, which is a hard error on a board a fab would cut without complaint.
+    """
+    body = rect_outline(0, 0, 50, 40)
+    body += rect_outline(20, 15, 30, 25)  # the window
+    body += _testpoint("TP1", 10, 10, "/SCL")
+    body += _testpoint("TP2", 14, 10, "/SDA")
+    body += _testpoint("TP90", 10, 20, "GND", value="GND")
+    body += _testpoint("TP91", 14, 20, "GND", value="GND")
+    for i, (x, y) in enumerate([(5, 5), (45, 5), (5, 35), (45, 35)], start=1):
+        body += _hole(f"H{i}", x, y, net="GND")
+    return _wrap(body)
+
+
+def probe_over_a_slot() -> str:
+    """The slotted board with TP2 moved into the middle of the window."""
+    return slotted().replace("(at 14 10)", "(at 25 20)", 1)
+
+
+def panelised() -> str:
+    """Two separate board outlines on one Edge.Cuts layer."""
+    body = rect_outline(0, 0, 50, 40)
+    body += rect_outline(60, 0, 110, 40)
+    body += _testpoint("TP1", 10, 10, "/SCL")
+    body += _testpoint("TP90", 10, 20, "GND", value="GND")
+    body += _testpoint("TP91", 14, 20, "GND", value="GND")
+    for i, (x, y) in enumerate([(5, 5), (45, 5), (5, 35), (45, 35)], start=1):
+        body += _hole(f"H{i}", x, y, net="GND")
+    return _wrap(body)
+
+
+def unreachable_rails() -> str:
+    """Probes on the data lines and on nothing that powers or resets the board."""
+    body = rect_outline()
+    body += _testpoint("TP1", 10, 10, "/SCL")
+    body += _testpoint("TP2", 14, 10, "/SDA")
+    body += _testpoint("TP90", 10, 20, "GND", value="GND")
+    body += _testpoint("TP91", 14, 20, "GND", value="GND")
+    # The rails and the reset line exist on the board, on a component's pads, and nothing
+    # probes them.
+    body += _part_with_nets("U1", 30, 20, ["+3V3", "+1V8", "/MCU_NRST", "/SCL"])
+    for i, (x, y) in enumerate([(5, 5), (45, 5), (5, 35), (45, 35)], start=1):
+        body += _hole(f"H{i}", x, y, net="GND")
+    return _wrap(body)
 
 
 def healthy() -> str:

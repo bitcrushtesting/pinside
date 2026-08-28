@@ -9,7 +9,7 @@ for finding in run(board):
 from .board import Board, MountingHole, TestPoint, read_board, transform
 from .checks import ERROR, INFO, WARNING, Finding, Limits, run
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "ERROR",
     "INFO",

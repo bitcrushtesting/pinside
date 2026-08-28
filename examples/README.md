@@ -15,7 +15,7 @@ pinside check examples/demo-board.kicad_pcb -f svg > plan.svg
 `demo-fixture.json` is the config `pinside init` drafts from that board, with one
 edit: the SPI bus is given `"guard": "dut_reset"`, because on a real board that
 bus belongs to the DUT's own controller and the fixture may only master it while
-the DUT is held in reset. That edit is the part a person has to make — the
+the DUT is held in reset. That edit is the part a person has to make; the
 grouping and the pin assignment come out of `init` already correct.
 
 ```bash
@@ -30,7 +30,7 @@ mirrored coordinates, plus the outline and the four mounting holes. Open it and 
 from Schematic** to bring in the resistors and the Pico 2; the probes stay where they are.
 
 The config targets a **Raspberry Pi Pico 2**, which is the default. Its 26 header GPIO are ample
-for these 14 channels — the Cuarto 500's 34 need a bare RP2350B, which is what `"board": "bare"`
+for these 14 channels. The Cuarto 500's 34 need a bare RP2350B, which is what `"board": "bare"`
 is for.
 
 The generated `README.md` carries the channel map as a table, and `openrpc.json`

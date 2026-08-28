@@ -39,6 +39,29 @@ ensure_ruff() {
     echo "$venv/bin/ruff"
 }
 
+# coverage.py, for scripts/test.sh --coverage. Pinned in pyproject's dev extra
+# alongside ruff and installed into the same .venv-tools/, so a coverage number
+# from CI and one from your machine came off the same tool.
+coverage_spec() {
+    sed -n 's/.*"\(coverage==[0-9.]*\)".*/\1/p' "$root/pyproject.toml" | head -1
+}
+
+ensure_coverage() {
+    local spec want have
+    spec="$(coverage_spec)"
+    want="${spec#coverage==}"
+
+    if [ -x "$venv/bin/coverage" ]; then
+        have="$("$venv/bin/coverage" --version | head -1 | awk '{print $2}')"
+        [ "$have" = "$want" ] && { echo "$venv/bin/coverage"; return 0; }
+    fi
+
+    echo "scripts: installing $spec into .venv-tools/" >&2
+    [ -d "$venv" ] || python3 -m venv "$venv" >&2
+    "$venv/bin/pip" install --quiet --disable-pip-version-check "$spec" >&2
+    echo "$venv/bin/coverage"
+}
+
 # clang-format formats the C templates. It is not installed automatically:
 # it comes from a toolchain (LLVM, Xcode, apt) rather than from pip, and
 # guessing which one a machine wants is worse than saying what is missing.
