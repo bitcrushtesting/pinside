@@ -4,6 +4,7 @@
 #   scripts/test.sh              # run everything
 #   scripts/test.sh -v           # ... verbosely; arguments go to unittest
 #   scripts/test.sh --coverage   # ... under coverage.py, then print the report
+#   scripts/test.sh --no-kicad   # ... as a machine without KiCad sees it
 #
 # One test compiles the firmware the generator emits and runs its own suite
 # against a mock HAL. It is the only check that the C templates and the
@@ -22,6 +23,10 @@ args=()
 for arg in "$@"; do
     case "$arg" in
         --coverage) coverage=1 ;;
+        # Anyone likely to change the KiCad emitter has KiCad installed, so the configuration
+        # CI actually runs -- every KiCad test skipped -- is the one nobody exercises. That is
+        # how a skip guard goes missing and the whole suite errors on the pull request instead.
+        --no-kicad) export PINSIDE_NO_KICAD=1 ;;
         *) args+=("$arg") ;;
     esac
 done

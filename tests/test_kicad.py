@@ -50,6 +50,12 @@ except library.LibraryError:
 # whose whole purpose is these tests goes green having run none of them.
 REQUIRE_KICAD = os.environ.get("PINSIDE_REQUIRE_KICAD") == "1"
 
+# The other direction, for `scripts/test.sh --no-kicad`. Anyone likely to touch the KiCad
+# emitter has KiCad installed, so the path CI actually runs -- everything here skipped -- is the
+# one they never exercise. A guard that goes missing then fails only on the pull request.
+if os.environ.get("PINSIDE_NO_KICAD") == "1":
+    KICAD_CLI, HAVE_SYMBOLS, REQUIRE_KICAD = None, False, False
+
 
 def need_kicad(case: unittest.TestCase, what: str) -> None:
     """Skip, unless we were promised KiCad is here, in which case fail."""
@@ -609,7 +615,6 @@ class TestProjectGeneration(unittest.TestCase):
         self.assertEqual(list(self.out.iterdir()), [])
 
 
-@unittest.skipIf(not (KICAD_CLI and HAVE_SYMBOLS) and not REQUIRE_KICAD, "kicad-cli not installed")
 class TestHardwareNote(unittest.TestCase):
     """The plate-force arithmetic, which needs no KiCad."""
 
@@ -645,6 +650,7 @@ class TestHardwareNote(unittest.TestCase):
         self.assertIn(f"{self.probe.travel_mm} mm of probe travel", self.note(14))
 
 
+@unittest.skipIf(not (KICAD_CLI and HAVE_SYMBOLS) and not REQUIRE_KICAD, "kicad-cli not installed")
 class TestKiCadAcceptsIt(unittest.TestCase):
     """The only test that proves the output is a project KiCad will actually open."""
 
