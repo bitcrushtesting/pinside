@@ -70,6 +70,15 @@ The fixture board, the firmware's host side, and the first release published to 
   them to no-net. `pinside check` called the board clean, because it read the name off each pad
   and never compared the ordinals: that is what `PS043` now catches, and the board is renumbered.
   Confirmed in both directions against `kicad-cli pcb export ipcd356`.
+- **The generated firmware did not link against the real Pico SDK.** `main.c` calls
+  `set_sys_clock_khz`, a `static inline` in `hardware/clocks.h`, and included only
+  `pico/stdlib.h`, which does not pull that in. Calling an undeclared function is a warning
+  under C11, not an error, so every translation unit compiled and only the linker objected. The
+  host tests could not have caught it: they build `fixture_core.c` against the mock HAL and
+  never compile `main.c`. Found by the new cross-compile job on its first run. The generated
+  project now includes the header, links `hardware_clocks`, and builds with
+  `-Werror=implicit-function-declaration`, so the next missing header is a compile error naming
+  the function rather than a bare symbol at link time.
 - `resolve_board` now applies the fixture transform. It did not, so `fx`/`fy` were zero
   everywhere: not obviously wrong, just every probe at the origin.
 - Findings printed by the CLI now go to the current `sys.stderr` rather than whichever stream it
