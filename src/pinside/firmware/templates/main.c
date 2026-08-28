@@ -11,6 +11,10 @@
 
 #include "fixture_config.h"
 #include "fixture_core.h"
+/* set_sys_clock_khz is a static inline here, and pico/stdlib.h does not pull this in. Without
+ * it the call is an implicit declaration -- a warning under C11, not an error -- so the file
+ * compiles and the link fails with "undefined reference to set_sys_clock_khz". */
+#include "hardware/clocks.h"
 #include "pico/stdlib.h"
 
 int main(void) {
