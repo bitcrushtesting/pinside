@@ -3,7 +3,22 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A rehearsal. Everything a tag does except the publishing, so the pipeline can
+  # be exercised before the first real release and after any change to it.
+  #
+  # Manual runs used to be listed here and could never work: GITHUB_REF_NAME is
+  # the branch on a workflow_dispatch, so the tag-matches-version check compared
+  # a branch name to a version and failed on the first step, every time.
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish. 'rehearse' builds and checks everything and publishes nothing."
+        type: choice
+        options:
+          - rehearse
+          - testpypi
+          - pypi
+        default: rehearse
 
 permissions:
   contents: read
@@ -22,6 +37,7 @@ jobs:
       # Disagreement between the two is how a release ends up unreproducible, so
       # it fails here rather than shipping.
       - name: The tag matches the packaged version
+        if: github.event_name == 'push'
         run: |
           tagged="${GITHUB_REF_NAME#v}"
           packaged=$(python -c "import tomllib,pathlib; \
@@ -31,6 +47,15 @@ jobs:
             exit 1
           fi
           echo "releasing $packaged"
+
+      # Nothing to compare a version against on a rehearsal, so say what a tag
+      # would have to be named for this commit to release.
+      - name: What a tag would release
+        if: github.event_name != 'push'
+        run: |
+          packaged=$(python -c "import tomllib,pathlib; \
+              print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "rehearsing ${{ inputs.target }}: this commit would release as v$packaged"
 
       - name: Build
         run: |
@@ -51,15 +76,38 @@ jobs:
           assert any(n.endswith("py.typed") for n in names), "py.typed missing"
           PY
 
+      # What PyPI itself validates on upload: the metadata, and whether the
+      # README renders. Nothing else in the pipeline looks at either, so without
+      # this the first time a bad long_description is noticed is the upload
+      # rejecting it, after the tag exists and cannot be moved.
+      - name: The metadata is one PyPI would accept
+        run: |
+          python -m pip install --upgrade twine
+          twine check --strict dist/*
+
       - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
           if-no-files-found: error
 
+      # A rehearsal that stopped here proved the build and said nothing about
+      # it. Install the wheel into a clean environment and run the thing.
+      - name: The wheel installs and runs
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install --quiet dist/*.whl
+          /tmp/verify/bin/pinside --version
+          /tmp/verify/bin/pinside check examples/demo-board.kicad_pcb --strict
+          /tmp/verify/bin/pinside generate examples/demo-fixture.json --out /tmp/verify-fw
+          /tmp/verify-fw/test/run.sh
+
   pypi:
     name: Publish to PyPI
     needs: build
+    # A tag publishes. A manual run publishes only when asked to in as many
+    # words, so the default manual run cannot reach PyPI by accident.
+    if: github.event_name == 'push' || inputs.target == 'pypi'
     runs-on: ubuntu-latest
     # A trusted publisher: PyPI verifies this workflow's OIDC identity, so there
     # is no long-lived token in the repository to leak or rotate. Configure it at
@@ -78,9 +126,31 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
+  testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    # The upload path itself, against a throwaway index. Needs its own trusted
+    # publisher at test.pypi.org, configured the same way as the real one.
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/pinside
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
   github:
     name: Publish the GitHub release
     needs: pypi
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
