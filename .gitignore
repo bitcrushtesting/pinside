@@ -10,3 +10,27 @@ dist/
 
 # scripts/test.sh and the generated firmware's own tests build here.
 /tmp-firmware/
+
+# scripts/test.sh --coverage
+.coverage
+htmlcov/
+
+# What KiCad leaves beside a board it has opened. Per-user state and automatic
+# snapshots: they churn on every open, whether or not anything was edited.
+#
+# Not *.kicad_pro. That one carries the design rules, the net classes and the
+# board stackup, so it belongs in the repository -- and `pinside project`
+# generates one deliberately, as part of the project it writes.
+*.kicad_prl
+.history/
+*-backups/
+fp-info-cache
+_autosave-*
+*.kicad_pcb-bak
+*.kicad_sch-bak
+*.kicad_*.lck
+
+# The demo board is an input to pinside, not a KiCad project: it is a bare
+# .kicad_pcb with no schematic, and the .kicad_pro is one KiCad invents the
+# first time somebody opens it.
+/examples/demo-board.kicad_pro
