@@ -21,9 +21,13 @@ _README = (_ROOT / "README.md").read_text(encoding="utf-8")
 _SOURCE = _ROOT / "src" / "pinside"
 
 # A code as it appears where a Finding is constructed: a bare quoted literal.
-_EMITTED = re.compile(r'"(P[SF]\d{3})"')
+#
+# PS board checks, PF config checks, PK project generation. The PK family was missed for a
+# release because this pattern only looked for the first two, which is the same drift the test
+# exists to catch, one level up.
+_EMITTED = re.compile(r'"(P[SFK]\d{3})"')
 # A code as the README refers to it, either alone or as an endpoint of a PF030-PF038 range.
-_DOCUMENTED = re.compile(r"\b(P[SF]\d{3})\b")
+_DOCUMENTED = re.compile(r"\b(P[SFK]\d{3})\b")
 
 
 def _emitted_codes() -> dict[str, set[str]]:
@@ -38,7 +42,7 @@ def _emitted_codes() -> dict[str, set[str]]:
 def _documented_codes() -> set[str]:
     """Every code the README names, expanding `PFxxx-PFyyy` ranges."""
     named = set(_DOCUMENTED.findall(_README))
-    for family, low, high in re.findall(r"\b(P[SF])(\d{3})\s*-\s*(?:P[SF])?(\d{3})\b", _README):
+    for family, low, high in re.findall(r"\b(P[SFK])(\d{3})\s*-\s*(?:P[SFK])?(\d{3})\b", _README):
         named.update(f"{family}{n:03d}" for n in range(int(low), int(high) + 1))
     return named
 
@@ -51,6 +55,7 @@ class DocumentedCodes(unittest.TestCase):
         self.assertGreater(len(codes), 30, "the emitted-code scan found almost nothing")
         self.assertIn("PS001", codes)
         self.assertIn("PF001", codes)
+        self.assertIn("PK001", codes)
 
     def test_every_emitted_code_is_in_the_readme(self):
         documented = _documented_codes()

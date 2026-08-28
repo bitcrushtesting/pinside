@@ -473,7 +473,14 @@ to an ADC read; every line is classified before anything waits on it, and pushed
 | PF041 | A test point with no channel |
 | PF042 | A divider that would present more than the ADC reference |
 
-`pinside project` additionally reports the board findings (`PS...`) and refuses on any error.
+`pinside project` additionally reports the board findings (`PS...`) and refuses on any error. It
+has three of its own, for the things that stop a project being written at all:
+
+| Code | What it means |
+|---|---|
+| PK001 | No DUT board, so there are no coordinates to lay a fixture out from |
+| PK002 | The output directory is not empty and pinside did not write it |
+| PK003 | KiCad's symbol libraries were not found, so a schematic cannot be built |
 
 ## As a library
 
