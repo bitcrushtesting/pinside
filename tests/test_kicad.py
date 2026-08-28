@@ -740,19 +740,35 @@ class TestKiCadAcceptsIt(unittest.TestCase):
             cwd=out,
             timeout=180,
         )
-        combined = proc.stdout + proc.stderr
-        self.assertNotIn("Failed to load", combined, combined)
-        self.assertIn("Found 0 violations", combined, combined)
+        self.assert_erc_clean(proc, out / "erc.rpt")
+
+    def assert_erc_clean(self, proc, report: Path) -> None:
+        """ERC found nothing, and says which kind of nothing it did not find.
+
+        A machine with KiCad's libraries on disk but no *profile* -- a fresh container, which
+        is exactly what CI is -- cannot resolve `MCU_Module:` or `power:` to anything, and ERC
+        reports one warning per reference. Those say the environment is unconfigured, not that
+        the schematic is wrong, and reading forty of them to work that out is a waste of
+        somebody's afternoon. So name it.
+        """
+        text = report.read_text(encoding="utf-8") if report.exists() else ""
+        self.assertNotIn("Failed to load", proc.stdout + proc.stderr)
+        if "Found 0 violations" in proc.stdout:
+            return
+        if "lib_symbol_issues" in text or "footprint_link_issues" in text:
+            self.fail(
+                "ERC cannot resolve the stock library nicknames, so every symbol is a "
+                "warning. That is a missing KiCad profile, not a defect in the generated "
+                "schematic: seed sym-lib-table and fp-lib-table from KiCad's own templates "
+                "into its config directory, which is what a first GUI launch does.\n"
+                f"{proc.stdout}"
+            )
+        self.fail(f"{proc.stdout}\n{text}")
 
     def test_erc_is_clean(self):
         report = self.out / "erc.rpt"
         proc = self._run("sch", "erc", "-o", str(report), f"{self.name}.kicad_sch")
-        self.assertNotIn("Failed to load", proc.stdout + proc.stderr)
-        self.assertIn(
-            "Found 0 violations",
-            proc.stdout,
-            f"{proc.stdout}\n{report.read_text() if report.exists() else ''}",
-        )
+        self.assert_erc_clean(proc, report)
 
     def test_the_board_loads_and_has_no_clearance_errors(self):
         report = self.out / "drc.rpt"
