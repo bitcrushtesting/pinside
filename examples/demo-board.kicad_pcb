@@ -1,4 +1,5 @@
 (kicad_pcb (version 20241229) (generator "pinside-tests")
+  (general (thickness 1.6))
   (net 0 "")
   (net 1 "/DUT_TXD")
   (net 2 "/DUT_RXD")

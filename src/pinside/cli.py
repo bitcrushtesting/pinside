@@ -78,6 +78,9 @@ def _limits_from(args) -> Limits:
         hole_clearance=args.hole_clearance,
         min_pad_diameter=args.min_pad,
         min_mounting_holes=args.min_holes,
+        probe_force=args.probe_force,
+        max_total_force=args.max_force,
+        max_deflection=args.max_deflection,
     )
 
 
@@ -483,6 +486,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=d.min_mounting_holes,
         help="mounting holes needed to locate the board",
+    )
+    limits.add_argument(
+        "--probe-force",
+        type=float,
+        default=d.probe_force,
+        help="spring force of one probe at full travel, N",
+    )
+    limits.add_argument(
+        "--max-force",
+        type=float,
+        default=d.max_total_force,
+        help="total closing force the fixture may need before it wants a press, N",
+    )
+    limits.add_argument(
+        "--max-deflection",
+        type=float,
+        default=d.max_deflection,
+        help="how far the DUT may bow between its supports under the probes, mm",
     )
     check.add_argument(
         "--ignore",

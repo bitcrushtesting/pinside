@@ -110,6 +110,7 @@ def emit_json(board: Board, findings: list[Finding], out=sys.stdout) -> None:
     payload = {
         "source": board.source,
         "frame": board.frame,
+        "thickness_mm": board.thickness,
         "outline": {
             "closed": board.outline.closed,
             "bbox": box.as_dict() if box else None,

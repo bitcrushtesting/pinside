@@ -278,7 +278,11 @@ def generate_project(
         probe = config.probe_part
         findings = findings + check_board(
             board,
-            Limits(probe_pitch=probe.min_pitch_mm, probe_body=probe.body_dia_mm),
+            Limits(
+                probe_pitch=probe.min_pitch_mm,
+                probe_body=probe.body_dia_mm,
+                probe_force=probe.force_n,
+            ),
         )
 
     if any(f.severity == ERROR for f in findings):

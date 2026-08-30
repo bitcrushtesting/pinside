@@ -31,6 +31,14 @@ class Limits:
     grid_tolerance: float = 0.01  # how exactly a coordinate must sit on a lattice, mm
     grid_fraction: float = 0.7  # share of probes on it before we call it an import grid
 
+    # What the probes push with, and what the DUT will take. One pin is nothing; a plate of
+    # them is a press, and the board in the middle of it is what gives way first.
+    probe_force: float = 0.75  # N per probe at full travel, for a 0985 receptacle + 0900 pin
+    max_total_force: float = 100.0  # N before the plate needs a lever or a pneumatic clamp
+    max_deflection: float = 0.5  # mm the DUT may bow between its supports
+    board_thickness: float = 1.6  # mm, when the board file declares no stackup thickness
+    board_modulus: float = 20000.0  # MPa, FR-4 in-plane flexural; ~20 GPa
+
 
 @dataclass
 class Finding:
@@ -379,6 +387,131 @@ def check_probe_body(board: Board, limits: Limits) -> list[Finding]:
     return []
 
 
+# Roark, rectangular plate with all four edges simply supported under a uniform load: the
+# maximum deflection is alpha * q * b**4 / (E * t**3), with b the shorter span. Alpha climbs
+# with the aspect ratio because a long plate stops being able to carry its load in two
+# directions and starts behaving like a beam across the short one.
+_PLATE_ALPHA = [
+    (1.0, 0.0444),
+    (1.2, 0.0616),
+    (1.4, 0.0770),
+    (1.6, 0.0906),
+    (1.8, 0.1017),
+    (2.0, 0.1106),
+    (3.0, 0.1336),
+    (4.0, 0.1400),
+]
+_PLATE_ALPHA_LONG = 0.1421  # the strip limit, b/a -> infinity
+
+
+def _plate_alpha(ratio: float) -> float:
+    """Roark's deflection coefficient for a long-side/short-side ratio, interpolated."""
+    if ratio >= _PLATE_ALPHA[-1][0]:
+        return _PLATE_ALPHA_LONG
+    for (r0, a0), (r1, a1) in pairwise(_PLATE_ALPHA):
+        if ratio <= r1:
+            return a0 + (a1 - a0) * (ratio - r0) / (r1 - r0)
+    return _PLATE_ALPHA_LONG
+
+
+def _bow(force: float, span: BBox, thickness: float, modulus: float) -> float:
+    """How far the middle of the DUT sinks under the probes, mm.
+
+    The DUT is treated as a uniformly loaded plate, simply supported around the span it is held
+    on. Both halves of that are approximations -- the probe force is not perfectly even and
+    bolted holes are stiffer than a simple support -- and both of them under-report the bow,
+    which is the right direction for a warning to be wrong in.
+    """
+    short, long = sorted((span.width, span.height))
+    if short <= 0 or thickness <= 0 or modulus <= 0:
+        return 0.0
+    pressure = force / (short * long)  # N/mm2, spread over the supported span
+    return _plate_alpha(long / short) * pressure * short**4 / (modulus * thickness**3)
+
+
+def check_contact_force(board: Board, limits: Limits) -> list[Finding]:
+    """What the whole plate of probes pushes with, and what the DUT does under it.
+
+    One spring pin is nothing: 0.75 N, less than the weight of a AA cell. Two hundred of them
+    is a press. The force is what closes the fixture, so it is carried by whatever holds the
+    lid down and then by the DUT's own mounting holes -- and between those holes the board is
+    an unsupported plate with the entire load spread across it. It bows, the probes in the
+    middle over-travel while the ones at the edge stop reaching, and the fixture reads
+    intermittent on whichever channel is furthest from a standoff.
+
+    Nothing about the drill plan shows this. It is a property of how many probes there are,
+    which is exactly the number nobody revisits after adding one more test point.
+    """
+    probes = len(board.test_points)
+    if not probes or limits.probe_force <= 0:
+        return []
+
+    total = probes * limits.probe_force
+    kgf = total / 9.81
+    holes = board.mounting_holes
+    out = []
+
+    if total > limits.max_total_force:
+        per_hole = f"{total / len(holes):.0f} N per mounting hole" if holes else "no mounting holes"
+        out.append(
+            Finding(
+                "PS028",
+                WARNING,
+                f"{probes} probes at {limits.probe_force:g} N close with "
+                f"{total:.0f} N ({kgf:.1f} kgf)",
+                [f"{probes} probes", per_hole],
+                f"past the {limits.max_total_force:g} N this allows, which is more than a "
+                "toggle clamp or a few thumbscrews will hold down: it needs a lever or "
+                "pneumatic clamp, and every newton of it is carried by the DUT's standoffs. "
+                "Use a lighter spring pin, or probe fewer points at once",
+            )
+        )
+
+    # The span the DUT is actually held on. Three holes make a plane and are the real supports;
+    # with fewer (PS050's finding) the board rests on whatever the fixture frame gives it, which
+    # is its own edge, so the outline is the honest fallback rather than a reason to say nothing.
+    span, support = None, ""
+    if len(holes) >= limits.min_mounting_holes:
+        xs, ys = [h.x for h in holes], [h.y for h in holes]
+        span = BBox(min(xs), min(ys), max(xs), max(ys))
+        support = f"supported {span.width:.0f}x{span.height:.0f} mm across {len(holes)} holes"
+    elif board.outline.bbox:
+        span = board.outline.bbox
+        support = f"supported {span.width:.0f}x{span.height:.0f} mm at the board edge"
+    if span is None or min(span.width, span.height) <= 0:
+        return out  # colinear holes or no outline: there is no span to bend across
+
+    thickness = board.thickness or limits.board_thickness
+    stated = "" if board.thickness else " assumed"
+    bow = _bow(total, span, thickness, limits.board_modulus)
+    if bow > limits.max_deflection:
+        # Small-deflection plate theory stops being true once the plate bows about as far as it
+        # is thick: the board starts carrying load by stretching as well as bending, which the
+        # formula does not know about, so it over-reports. Saying so costs one clause and stops
+        # the number being quoted as though it were measured.
+        over_range = (
+            " The bow is past the board's own thickness, where this model overstates it: "
+            "read it as far too much, not as a measurement."
+            if bow > thickness
+            else ""
+        )
+        out.append(
+            Finding(
+                "PS029",
+                WARNING,
+                f"{total:.0f} N of probe force bows the DUT about {bow:.2f} mm "
+                f"between its supports",
+                [f"{thickness:g} mm board{stated}", support, f"{probes} probes"],
+                f"more than the {limits.max_deflection} mm this allows, estimated as a "
+                "uniformly loaded FR-4 plate. At that much bow the probes in the middle "
+                "over-travel while the outer ones stop reaching, and the joints under any "
+                "large BGA take the strain. Add supports inside the span, use a lighter "
+                "spring pin, or back the DUT with a stiffener." + over_range,
+            )
+        )
+    return out
+
+
 def check_pad_size(board: Board, limits: Limits) -> list[Finding]:
     small = [
         f"{t.ref} {t.pad.min_dimension:g}mm"
@@ -659,6 +792,7 @@ CHECKS = [
     check_hole_clearance,
     check_obstructions,
     check_probe_body,
+    check_contact_force,
     check_pad_size,
     check_sides,
     check_ground,
