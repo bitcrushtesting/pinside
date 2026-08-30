@@ -385,6 +385,63 @@ class ProbeBody(unittest.TestCase):
         self.assertNotIn("PS027", codes(boards._wrap(body), Limits(probe_body=1.0)))
 
 
+class ContactForce(unittest.TestCase):
+    """What a whole plate of probes pushes with, and what the DUT does under it."""
+
+    def test_a_handful_of_probes_says_nothing(self):
+        found = codes(boards.healthy())
+        self.assertNotIn("PS028", found)
+        self.assertNotIn("PS029", found)
+
+    def test_a_full_plate_of_probes_is_reported(self):
+        found = codes(boards.dense_field(thickness=1.6))
+        self.assertIn("PS028", found)  # 200 x 0.75 N = 150 N, past a hand clamp
+        self.assertIn("PS029", found)  # and it bows a 1.6 mm board most of a millimetre
+
+    def test_the_finding_names_the_force_and_the_bow(self):
+        board = transform(read_board(write(boards.dense_field(thickness=1.6))))
+        force = next(f for f in run(board) if f.code == "PS028")
+        self.assertIn("150 N", force.summary)
+        self.assertIn("38 N per mounting hole", force.refs)
+
+        bow = next(f for f in run(board) if f.code == "PS029")
+        self.assertIn("1.6 mm board", bow.refs)
+        self.assertIn("150x90 mm across 4 holes", " ".join(bow.refs))
+
+    def test_a_lighter_spring_pin_relaxes_both(self):
+        # The same board probed with something that pushes a tenth of a newton.
+        found = codes(boards.dense_field(thickness=1.6), Limits(probe_force=0.1))
+        self.assertNotIn("PS028", found)
+        self.assertNotIn("PS029", found)
+
+    def test_a_thicker_board_takes_the_same_load(self):
+        # Stiffness goes as the cube of the thickness, so 2.4 mm bows a third as far. The force
+        # is unchanged, which is the point of the two findings being separate.
+        found = codes(boards.dense_field(thickness=2.4))
+        self.assertIn("PS028", found)
+        self.assertNotIn("PS029", found)
+
+    def test_a_thin_board_bows_further(self):
+        thin = transform(read_board(write(boards.dense_field(thickness=0.8))))
+        thick = transform(read_board(write(boards.dense_field(thickness=1.6))))
+
+        def bow(board):
+            return next(f for f in run(board) if f.code == "PS029")
+
+        self.assertIn("model overstates it", bow(thin).detail)  # bow past the board's thickness
+        self.assertNotIn("model overstates it", bow(thick).detail)
+
+    def test_an_undeclared_thickness_is_assumed_and_said_so(self):
+        board = transform(read_board(write(boards.dense_field())))
+        self.assertIsNone(board.thickness)
+        bow = next(f for f in run(board) if f.code == "PS029")
+        self.assertIn("1.6 mm board assumed", bow.refs)
+
+    def test_the_declared_thickness_is_read(self):
+        board = read_board(write(boards.dense_field(thickness=0.8)))
+        self.assertEqual(board.thickness, 0.8)
+
+
 class NetRecordFormats(unittest.TestCase):
     """KiCad 9 writes (net <ordinal> "NAME"); KiCad 10 dropped the ordinal.
 

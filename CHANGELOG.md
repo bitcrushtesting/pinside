@@ -13,6 +13,19 @@ existing agents wrong.
 
 ## [Unreleased]
 
+### Added
+
+- **Contact-force checks.** `PS028` reports the closing force a plate of probes adds up to --
+  one 0985 pin is 0.75 N, two hundred are 150 N and a lever clamp -- and `PS029` estimates how
+  far that force bows the DUT between its mounting holes, treating it as a uniformly loaded
+  plate. Neither is visible in the drill plan: they are properties of how many probes there
+  are, which is the number nobody revisits after adding one more test point. The probe chosen
+  in a fixture config sets the per-probe force, so a lighter pin relaxes both.
+- The board's stackup thickness is read from `(general (thickness ...))` and reported as
+  `thickness_mm` in the JSON output. It is what decides how stiff the DUT is; boards that
+  declare none are assumed to be 1.6 mm FR-4, and the finding says so.
+- `--probe-force`, `--max-force` and `--max-deflection` on `pinside check`.
+
 ## [0.2.0]
 
 The fixture board, the firmware's host side, and the first release published to PyPI.

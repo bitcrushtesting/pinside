@@ -160,6 +160,10 @@ class Board:
     # a KiCad 10 board, which has no ordinals to disagree about.
     net_ordinals: dict[int, set[str]] = field(default_factory=dict)
 
+    # The stackup thickness the board file declares, mm. None when it declares none, which is
+    # what a hand-written or minimal file does: how stiff the DUT is then has to be assumed.
+    thickness: float | None = None
+
     @property
     def nets(self) -> set[str]:
         """Every named net the board file mentions, from any pad on any footprint.
@@ -339,6 +343,20 @@ def read_net_ordinals(tree) -> dict[int, set[str]]:
     return ordinals
 
 
+def read_thickness(tree) -> float | None:
+    """The board's own stackup thickness, from `(general (thickness 1.6))`.
+
+    It is the one number in the file that says how stiff the DUT is, and stiffness is what
+    decides whether the probes bow it. A board that does not declare one is not an error: the
+    force check falls back to an assumption and says that it did.
+    """
+    for general in find_all(tree, "general"):
+        values = floats(child(general, "thickness"))
+        if values and values[0] > 0:
+            return values[0]
+    return None
+
+
 def read_board(path: str) -> Board:
     tree = load(path)
     outline = read_outline(tree)
@@ -394,6 +412,7 @@ def read_board(path: str) -> Board:
         mounting_holes=holes,
         obstacles=obstacles,
         net_ordinals=read_net_ordinals(tree),
+        thickness=read_thickness(tree),
     )
 
 

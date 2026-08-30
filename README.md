@@ -91,6 +91,7 @@ receptacle. Change them when your probes differ:
 
 ```bash
 pinside board.kicad_pcb --probe-pitch 1.9 --probe-body 1.27 --edge-clearance 1.5 --min-pad 0.7
+pinside board.kicad_pcb --probe-force 0.55 --max-force 100 --max-deflection 0.5
 ```
 
 `--ignore PS041,PS042` silences findings you have already decided about.
@@ -140,6 +141,8 @@ pinside generate fixture.json --out firmware/ --json | jq '.errors'
 | PS025 | warning | A test pad is too small for a spring tip plus placement tolerance |
 | PS026 | warning | Test points on both sides; one plate cannot reach them all |
 | PS027 | warning | The tip clears a component but the receptacle body does not |
+| PS028 | warning | The probes add up to more force than a hand clamp will close |
+| PS029 | warning | That force bows the DUT between its supports, so contact goes uneven |
 | PS030 | error | No ground test point: there is no return path to measure against |
 | PS031 | warning | Only one ground probe |
 | PS032 | info | Plated mounting holes carry no net; grounding them is a free return path |
@@ -156,6 +159,15 @@ pinside generate fixture.json --out firmware/ --json | jq '.errors'
 
 PS010 and PS012 are the two that matter most in practice: both mean *the layout is not finished*,
 and any fixture cut from those coordinates is scrap.
+
+`PS028` and `PS029` are about force rather than geometry, and they are the two that only
+appear on a board somebody kept adding test points to. One spring pin pushes 0.75 N, which is
+nothing; two hundred of them push 150 N, which is a press. That load closes the fixture, is
+carried by the DUT's standoffs, and between them the board is an unsupported plate with the
+whole of it spread across its middle. It bows, the probes in the centre over-travel while the
+outer ones stop reaching, and the fixture reads intermittent on whichever channel is furthest
+from a hole. The bow is estimated as a uniformly loaded, simply supported plate, using the
+stackup thickness from the board file when it declares one and 1.6 mm FR-4 when it does not.
 
 `PS043` and `PS044` are about net *numbering* rather than geometry. Through KiCad 9 a net is
 identified by its ordinal and the name beside it is only a label, so two names on one number are
@@ -246,14 +258,14 @@ involves.
 `millmax_0985`: a Mill-Max 0985 receptacle with an 0900 spring pin, on a 2.54 mm pitch. The
 receptacle is what makes a fixture maintainable: a worn pin pulls out and a new one goes in.
 
-| Probe | Hole | Pad | Minimum pitch |
-|---|---|---|---|
-| `millmax_0985` (default) | 1.37 mm | 2.29 mm | 2.54 mm |
-| `millmax_0906` | 1.02 mm | 1.70 mm | 1.91 mm |
-| `soldered_1mm` | 1.02 mm | 1.60 mm | 2.00 mm |
+| Probe | Hole | Pad | Minimum pitch | Force |
+|---|---|---|---|---|
+| `millmax_0985` (default) | 1.37 mm | 2.29 mm | 2.54 mm | 0.75 N |
+| `millmax_0906` | 1.02 mm | 1.70 mm | 1.91 mm | 0.55 N |
+| `soldered_1mm` | 1.02 mm | 1.60 mm | 2.00 mm | 0.70 N |
 
-The probe sets the spacing limit, so choosing a finer one relaxes the `PS021` check without a
-second edit.
+The probe sets both the spacing limit and the force, so choosing a finer one relaxes the `PS021`
+check and lowers the load `PS028` and `PS029` measure, without a second edit.
 
 Dimensions are what pinside builds to, so check them against your supplier's drawing before
 ordering. Each entry records where its numbers came from and whether anyone has done that check;

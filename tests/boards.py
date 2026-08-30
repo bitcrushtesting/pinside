@@ -216,6 +216,43 @@ def panelised() -> str:
     return _wrap(body)
 
 
+def dense_field(
+    cols: int = 20, rows: int = 10, width: float = 160.0, height: float = 100.0, thickness=None
+) -> str:
+    """A big board under a full plate of probes: the case the force checks exist for.
+
+    Every probe here is placed, spaced and netted correctly. The only thing wrong with the board
+    is how many of them there are, which is why no geometric check says anything about it.
+    """
+    body = rect_outline(0, 0, width, height)
+    n = 0
+    for row in range(rows):
+        for col in range(cols):
+            n += 1
+            ground = n <= 2
+            body += _testpoint(
+                f"TP{n}",
+                10 + col * 2.54,
+                10 + row * 2.54,
+                "GND" if ground else f"/SIG{n}",
+                value="GND" if ground else "TestPoint",
+            )
+    for i, (x, y) in enumerate(
+        [(5, 5), (width - 5, 5), (5, height - 5), (width - 5, height - 5)], start=1
+    ):
+        body += _hole(f"H{i}", x, y, net="GND")
+    return with_thickness(_wrap(body), thickness) if thickness else _wrap(body)
+
+
+def with_thickness(text: str, thickness: float) -> str:
+    """Give a board the `(general (thickness ...))` a real KiCad file carries."""
+    return text.replace(
+        '(generator "pinside-tests")',
+        f'(generator "pinside-tests") (general (thickness {thickness}))',
+        1,
+    )
+
+
 def unreachable_rails() -> str:
     """Probes on the data lines and on nothing that powers or resets the board."""
     body = rect_outline()
