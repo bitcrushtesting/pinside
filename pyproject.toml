@@ -21,7 +21,7 @@ dependencies = []
 [project.optional-dependencies]
 # Everything the scripts under scripts/ need. They install it themselves into
 # .venv-tools/ when it is missing, so a fresh checkout needs no setup step.
-dev = ["ruff==0.16.5", "coverage==7.13.0"]
+dev = ["ruff==0.16.5", "coverage==7.16.0"]
 
 # Talking to a fixture over USB CDC. Only pinside.client and `pinside probe`
 # need this; reading boards, checking them and generating firmware stay
